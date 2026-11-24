@@ -1,8 +1,8 @@
 /* Service worker: deixa o app abrir sem internet.
    Ao publicar uma versão nova, aumente o número da VERSAO. */
-const VERSAO = 'lince-cadastro-v3';
+const VERSAO = 'lince-cadastro-v5';
 const ARQUIVOS = ['./', './index.html', './app.js', './fone.js', './config.js', './manifest.json',
-  './logo.png', './logo-branca.png', './icon-192.png', './icon-512.png'];
+  './logo.png', './logo-branca.png', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './favicon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSAO).then(c => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));

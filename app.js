@@ -179,7 +179,7 @@ function renderLogin(msg) {
     <div class="linha-d"></div>
     <h1>Conferência de cadastro</h1>
     <label class="lb">Usuário</label>
-    <input class="in" id="lu" inputmode="numeric" autocomplete="username" value="${esc(LS.get('ultimoUsuario', ''))}">
+    <input class="in" id="lu" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" value="${esc(LS.get('ultimoUsuario', ''))}">
     <label class="lb">Senha</label>
     <input class="in" id="ls" type="password" autocomplete="current-password">
     <button class="btn full" id="lb">Entrar</button>
