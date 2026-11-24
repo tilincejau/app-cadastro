@@ -1,7 +1,7 @@
 /* ===== CONFIGURAÇÃO DO APP – edite apenas este arquivo ===== */
 window.CONFIG = {
   // URL da implantação do Apps Script (termina em /exec)
-  API_URL: 'COLE_AQUI_A_URL_DO_APPS_SCRIPT',
+  API_URL: 'https://script.google.com/macros/s/AKfycbxcnpkmFDY8KYxXcJ9uJGXMcYXfuOsQW_bH4HbcBSUA5PMbgWNL2AyQbV99z0M2LmMDVQ/exec',
 
   EMPRESA: 'Lince Distribuidora',
 
