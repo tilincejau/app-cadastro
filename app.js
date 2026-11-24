@@ -45,7 +45,7 @@ const S = {
   clientes: [], registros: [], dadosEm: 0,
   porCli: new Map(), extras: {},
   view: 'lista', aba: 'clientes', cli: null,
-  f: { dia: '', rota: '', sit: '', vend: '', q: '' },
+  f: { dia: '', rota: '', sit: '', vend: '', mesa: '', q: '' },
   pf: { u: '', st: '' },
   limite: 120, syncing: false, erro: '', ultimaSync: LS.get('ultimaSync', 0)
 };
@@ -165,7 +165,8 @@ function situacao(itens) {
   return 'EA';
 }
 
-function ehSupervisor() { return S.sess && S.sess.perfil === 'supervisor'; }
+function ehGerente() { return S.sess && S.sess.perfil === 'gerente'; }
+function ehSupervisor() { return S.sess && (S.sess.perfil === 'supervisor' || S.sess.perfil === 'gerente'); }
 
 /* ================================================================
    LOGIN
@@ -243,7 +244,7 @@ function render() {
     <div class="l1">
       ${S.view === 'detalhe' ? '<button class="btn-ico" id="voltar" aria-label="Voltar">←</button>' : ''}
       <img src="logo-branca.png" alt="Lince Distribuidora">
-      <div class="quem"><b>${esc(S.sess.usuario)}</b><br>${sup ? 'Supervisor' : 'Vendedor'}</div>
+      <div class="quem"><b>${esc(S.sess.usuario)}</b><br>${ehGerente() ? 'Gerente' : sup ? 'Supervisor' : 'Vendedor'}</div>
       <button class="btn-ico" id="bmenu" aria-label="Menu">☰</button>
     </div>
     <div class="barra-sync" id="bsync"></div>
@@ -302,8 +303,12 @@ function renderLista() {
   const sup = ehSupervisor();
   const todos = clientesCalculados();
   const f = S.f;
-  const vendedores = sup ? [...new Set(S.clientes.flatMap(c => [c.v1, c.v5]).filter(Boolean))].sort((a, b) => a - b) : [];
-  const baseVend = todos.filter(x => !f.vend || x.c.v1 === f.vend || x.c.v5 === f.vend);
+  const ger = ehGerente();
+  const mesas = ger ? [...new Set(S.clientes.map(c => c.m).filter(Boolean))].sort((a, b) => a - b) : [];
+  const baseMesa = todos.filter(x => !f.mesa || x.c.m === f.mesa);
+  const vendedores = sup ? [...new Set(baseMesa.flatMap(x => [x.c.v1, x.c.v5]).filter(Boolean))].sort((a, b) => a - b) : [];
+  if (f.vend && !vendedores.includes(f.vend)) f.vend = '';
+  const baseVend = baseMesa.filter(x => !f.vend || x.c.v1 === f.vend || x.c.v5 === f.vend);
   const baseDia = baseVend.filter(x => !f.dia || String(x.dia) === f.dia);
   const rotas = [...new Set(baseDia.map(x => x.c.p).filter(Boolean))].sort((a, b) => a - b);
   if (f.rota && !rotas.includes(f.rota)) f.rota = '';
@@ -320,6 +325,7 @@ function renderLista() {
       <button data-dia="" class="${!f.dia ? 'on' : ''}">Todos</button>
       ${[1, 2, 3, 4, 5].map(d => `<button data-dia="${d}" class="${f.dia === String(d) ? 'on' : ''}">${DIAS_C[d]}</button>`).join('')}
     </div>
+    ${ger ? `<select class="in" id="fmesa" style="grid-column:1/-1"><option value="">Todas as mesas</option>${mesas.map(m => `<option value="${esc(m)}" ${f.mesa === m ? 'selected' : ''}>Mesa ${esc(m)}</option>`).join('')}</select>` : ''}
     ${sup ? `<select class="in" id="fvend"><option value="">Todos vendedores</option>${vendedores.map(v => `<option ${f.vend === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>` : ''}
     <select class="in" id="frota" ${sup ? '' : 'style="grid-column:1/-1"'}><option value="">Todas as rotas</option>${rotas.map(r => `<option value="${esc(r)}" ${f.rota === r ? 'selected' : ''}>Rota ${esc(r)}${diaDaPasta(r) ? ' – ' + DIAS[diaDaPasta(r)] : ''}</option>`).join('')}</select>
     <input class="in busca" id="fq" placeholder="🔍 Buscar nome, código, CNPJ, contato" value="${esc(f.q)}">
@@ -335,6 +341,7 @@ function renderLista() {
 
   document.querySelectorAll('[data-dia]').forEach(b => b.onclick = () => { f.dia = b.dataset.dia; S.limite = 120; renderLista(); });
   document.querySelectorAll('[data-sit]').forEach(b => b.onclick = () => { f.sit = b.dataset.sit; S.limite = 120; renderLista(); });
+  if ($('#fmesa')) $('#fmesa').onchange = e => { f.mesa = e.target.value; S.limite = 120; renderLista(); };
   if ($('#fvend')) $('#fvend').onchange = e => { f.vend = e.target.value; renderLista(); };
   $('#frota').onchange = e => { f.rota = e.target.value; renderLista(); };
   const fq = $('#fq');
@@ -356,7 +363,7 @@ function cardCliente(x) {
     <div style="min-width:0">
       <div class="nm">${esc(c.s || c.r)}</div>
       <div class="sub">${esc(c.c)} · ${esc(c.r)}</div>
-      <div class="sub">Rota ${esc(c.p)}${x.dia ? ' (' + DIAS_C[x.dia] + ')' : ''}${ehSupervisor() ? ' · Vend ' + esc(c.v1) + (c.v5 ? '/' + esc(c.v5) : '') : ''}</div>
+      <div class="sub">Rota ${esc(c.p)}${x.dia ? ' (' + DIAS_C[x.dia] + ')' : ''}${ehSupervisor() ? ' · Vend ' + esc(c.v1) + (c.v5 ? '/' + esc(c.v5) : '') : ''}${ehGerente() ? ' · Mesa ' + esc(c.m) : ''}</div>
     </div>
     <div class="dir">
       <span class="chip ${sit[1]}">${sit[0]}</span>
@@ -520,11 +527,20 @@ function abrirLink(url) {
    ================================================================ */
 function renderPainel() {
   const sup = ehSupervisor();
-  const calc = clientesCalculados();
+  const ger = ehGerente();
+  const calcTodos = clientesCalculados();
+  const calc = ger && S.f.mesa ? calcTodos.filter(x => x.c.m === S.f.mesa) : calcTodos;
+  const porM = {};
+  if (ger) calcTodos.forEach(x => {
+    const m = x.c.m || '—';
+    const o = porM[m] = porM[m] || { tot: 0, ini: 0, ok: 0, ag: 0 };
+    o.tot++; if (x.sit !== 'NI') o.ini++; if (x.sit === 'OK') o.ok++; if (x.sit === 'AG') o.ag++;
+  });
+  const codsMesa = new Set(calc.map(x => x.c.c));
   const cont = { NI: 0, EA: 0, AG: 0, OK: 0 };
   calc.forEach(x => cont[x.sit]++);
   const regs = [];
-  S.porCli.forEach(l => l.forEach(r => regs.push(r)));
+  S.porCli.forEach((l, c) => { if (!ger || !S.f.mesa || codsMesa.has(c)) l.forEach(r => regs.push(r)); });
   regs.sort((a, b) => String(b.dt).localeCompare(String(a.dt)));
   const cliPorCod = new Map(S.clientes.map(c => [c.c, c]));
 
@@ -550,17 +566,20 @@ function renderPainel() {
   const usuarios = Object.keys(porU).sort();
   const filtrados = regs.filter(r => (!S.pf.u || r.u === S.pf.u) && (!S.pf.st || r.st === S.pf.st)).slice(0, 300);
 
+  const tabela = (titulo, rot, mapa) => `<div class="box"><h3>${titulo}</h3><div class="scroll"><table class="tb">
+    <tr><th>${rot}</th><th>Clientes</th><th>Iniciados</th><th>Aguard.</th><th>Concl.</th><th>%</th></tr>
+    ${Object.keys(mapa).sort((a, b) => a - b).map(v => { const o = mapa[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td>${o.ag}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div>${p}%</td></tr>`; }).join('')}
+  </table></div></div>`;
   $('#main').innerHTML = `
+  ${ger ? `<select class="in" id="pmesa" style="margin-bottom:10px"><option value="">Todas as mesas</option>${Object.keys(porM).sort((a, b) => a - b).map(m => `<option value="${esc(m)}" ${S.f.mesa === m ? 'selected' : ''}>Mesa ${esc(m)}</option>`).join('')}</select>` : ''}
   <div class="cards">
-    <div class="kpi"><div class="n">${calc.length}</div><div class="t">Clientes ${sup ? 'da mesa' : 'na carteira'}</div></div>
+    <div class="kpi"><div class="n">${calc.length}</div><div class="t">Clientes ${ger ? (S.f.mesa ? 'da mesa ' + esc(S.f.mesa) : 'no total') : sup ? 'da mesa' : 'na carteira'}</div></div>
     <div class="kpi o"><div class="n">${calc.length - cont.NI}</div><div class="t">Iniciados</div></div>
     <div class="kpi o"><div class="n">${cont.AG}</div><div class="t">Aguardando dono</div></div>
     <div class="kpi"><div class="n">${cont.OK}</div><div class="t">Concluídos</div></div>
   </div>
-  ${sup ? `<div class="box"><h3>Carteira por vendedor</h3><div class="scroll"><table class="tb">
-    <tr><th>Vend.</th><th>Clientes</th><th>Iniciados</th><th>Aguard.</th><th>Concl.</th><th>%</th></tr>
-    ${Object.keys(porV).sort((a, b) => a - b).map(v => { const o = porV[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td>${o.ag}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div>${p}%</td></tr>`; }).join('')}
-  </table></div></div>` : ''}
+  ${ger && !S.f.mesa ? tabela('Progresso por mesa', 'Mesa', porM) : ''}
+  ${sup ? tabela('Carteira por vendedor', 'Vend.', porV) : ''}
   <div class="box"><h3>${sup ? 'Ações por usuário' : 'Resumo dos meus envios'}</h3><div class="scroll"><table class="tb">
     <tr><th>Usuário</th><th>Enviados</th><th>Confirm.</th><th>Aguard.</th><th>Recus.</th><th>Fixos</th><th>Inválidos</th></tr>
     ${usuarios.map(u => { const o = porU[u]; return `<tr><td><b>${esc(u)}</b></td><td>${o.env}</td><td>${o.conf}</td><td>${o.pend}</td><td>${o.rec}</td><td>${o.fixo}</td><td>${o.inv}</td></tr>`; }).join('') || '<tr><td colspan="7" class="vazio">Nada enviado ainda.</td></tr>'}
@@ -575,6 +594,7 @@ function renderPainel() {
       ${filtrados.map(r => { const c = cliPorCod.get(r.c); return `<tr data-cli="${esc(r.c)}" style="cursor:pointer"><td>${dataBR(r.dt)}${r.local ? ' ⏳' : ''}</td><td>${esc(r.u)}</td><td>${esc(c ? (c.s || c.r) : r.c)}</td><td>${esc(r.vi)}<br><small>${esc(r.tp)} · ${esc(r.cn)}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''}</small></td><td>${chip(r.st)}${r.rs ? '<br><small>' + dataBR(r.rs) + '</small>' : ''}</td></tr>`; }).join('') || '<tr><td colspan="5" class="vazio">Sem registros.</td></tr>'}
     </table></div>
   </div>`;
+  if ($('#pmesa')) $('#pmesa').onchange = e => { S.f.mesa = e.target.value; renderPainel(); };
   $('#pu').onchange = e => { S.pf.u = e.target.value; renderPainel(); };
   $('#pst').onchange = e => { S.pf.st = e.target.value; renderPainel(); };
   $('#main').querySelectorAll('tr[data-cli]').forEach(tr => tr.onclick = () => {
