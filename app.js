@@ -11,19 +11,17 @@ const DIAS_C = { 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex' };
 const CAMPOS_FONE = ['Fone(1)', 'Fone(2)', 'Cel(1)', 'Cel(2)'];
 const ST = {
   PENDENTE: 'PENDENTE', CONFIRMADO: 'CONFIRMADO', RECUSADO: 'RECUSADO',
-  FILA_EMAIL: 'EMAIL NA FILA', ERRO_EMAIL: 'ERRO E-MAIL', FIXO: 'FIXO CONFERIDO', INVALIDO: 'INVALIDO'
+  FIXO: 'FIXO CONFERIDO', INVALIDO: 'INVALIDO'
 };
 const ST_INFO = {
   PENDENTE: ['Aguardando confirmação', 'ouro'],
   CONFIRMADO: ['Confirmado', 'verde'],
   RECUSADO: ['Dono recusou', 'verm'],
-  'EMAIL NA FILA': ['E-mail na fila', 'ouro'],
-  'ERRO E-MAIL': ['Erro no e-mail', 'verm'],
   'FIXO CONFERIDO': ['Fixo conferido', 'verde'],
   INVALIDO: ['Inválido', 'cinza']
 };
 const RESOLVIDO = new Set([ST.CONFIRMADO, ST.RECUSADO, ST.FIXO, ST.INVALIDO]);
-const AGUARDA = new Set([ST.PENDENTE, ST.FILA_EMAIL]);
+const AGUARDA = new Set([ST.PENDENTE]);
 const SIT = {
   NI: ['Não iniciado', 'cinza'], EA: ['Em andamento', 'azul'],
   AG: ['Aguardando', 'ouro'], OK: ['Concluído', 'verde']
@@ -111,7 +109,7 @@ function salvarDados() {
 function statusLocal(it) {
   if (it.acao === 'CONFERIDO') return ST.FIXO;
   if (it.acao === 'INVALIDO') return ST.INVALIDO;
-  return it.tp === 'EMAIL' ? ST.FILA_EMAIL : ST.PENDENTE;
+  return ST.PENDENTE;
 }
 
 /** Junta registros do servidor + itens ainda na fila do aparelho */
@@ -122,7 +120,7 @@ function reindexar() {
   S.registros.forEach(r => { ids.add(r.id); push(r); });
   fila.ler().forEach(it => {
     if (ids.has(it.id)) return;
-    push({ id: it.id, dt: it.dt, u: it.usuario, c: it.c, ct: it.ct, tp: it.tp, or: it.or, vb: it.vb, vi: it.vi, cn: it.cn, st: statusLocal(it), local: true });
+    push({ id: it.id, dt: it.dt, u: it.usuario, c: it.c, ct: it.ct, tp: it.tp, or: it.or, vb: it.vb, vi: it.vi, cn: it.cn, pa: it.pa, st: statusLocal(it), local: true });
   });
   m.forEach(l => l.sort((a, b) => String(b.dt).localeCompare(String(a.dt))));
   S.porCli = m;
@@ -418,17 +416,20 @@ function renderItens() {
   const cli = clienteAtual(); if (!cli || !$('#itensT')) return;
   const itens = itensDoCliente(cli);
   const tel = itens.filter(i => i.tp !== 'EMAIL'), em = itens.filter(i => i.tp === 'EMAIL');
-  $('#itensT').innerHTML = tel.length ? tel.map(cardItem).join('') : '<div class="vazio">Nenhum telefone na base.</div>';
-  $('#itensE').innerHTML = em.length ? em.map(cardItem).join('') : '<div class="vazio">Nenhum e-mail na base.</div>';
+  const cels = tel.filter(i => i.tp === 'CELULAR' && i.st !== ST.INVALIDO && i.st !== ST.RECUSADO);
+  const emPend = em.filter(i => i.st !== ST.CONFIRMADO && i.st !== ST.INVALIDO);
+  const ctx = { cels, emPend };
+  $('#itensT').innerHTML = tel.length ? tel.map(i => cardItem(i, ctx)).join('') : '<div class="vazio">Nenhum telefone na base.</div>';
+  $('#itensE').innerHTML = em.length ? em.map(i => cardItem(i, ctx)).join('') : '<div class="vazio">Nenhum e-mail na base.</div>';
   const handler = e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
     const it = itens.find(i => i.k === b.dataset.k); if (!it) return;
-    executar(cli, it, b.dataset.acao);
+    executar(cli, it, b.dataset.acao, itens, b.closest('.item'));
   };
   $('#itensT').onclick = handler; $('#itensE').onclick = handler;
 }
 
-function cardItem(it) {
+function cardItem(it, ctx) {
   const tipoChip = it.tp === 'CELULAR' ? '<span class="chip azul">Celular</span>' : it.tp === 'FIXO' ? '<span class="chip cinza">Fixo</span>' : it.tp === 'EMAIL' ? '<span class="chip azul">E-mail</span>' : '<span class="chip verm">Revisar número</span>';
   const jaFoi = it.regs.length > 0;
   let acoes = '';
@@ -436,14 +437,17 @@ function cardItem(it) {
   if (it.tp === 'CELULAR') {
     acoes = `<button class="btn zap peq" data-acao="WHATS" data-k="${k}">${jaFoi ? '↻ Reenviar' : '📲 Enviar'} WhatsApp</button>
              <button class="btn sec peq" data-acao="SMS" data-k="${k}">✉ SMS</button>`;
+    if (ctx.emPend.length) acoes = `<label class="inc"><input type="checkbox" class="incE" checked><span>Confirmar também o e-mail <b>${esc(ctx.emPend.map(e => e.valor).join(', '))}</b> na mesma mensagem</span></label>` + acoes;
   } else if (it.tp === 'FIXO') {
     acoes = `<button class="btn peq" data-acao="CONFERIDO" data-k="${k}">✔ Conferido</button>`;
   } else if (it.tp === 'EMAIL') {
-    acoes = `<button class="btn peq" data-acao="EMAIL" data-k="${k}">${jaFoi ? '↻ Reenviar' : '📧 Enviar'} confirmação</button>`;
+    if (!ctx.cels.length) acoes = `<div class="aviso" style="margin:0 0 6px">O e-mail é confirmado pelo WhatsApp do cliente. Adicione um celular em Telefones para enviar.</div>`;
+    else acoes = (ctx.cels.length > 1 ? `<select class="in selCel" style="margin-bottom:6px">${ctx.cels.map(c => `<option value="${esc(c.k)}">Enviar para ${esc(c.valor)}</option>`).join('')}</select>` : '') +
+      `<button class="btn zap peq" data-acao="EMAIL" data-k="${k}">${jaFoi ? '↻ Reenviar' : '📲 Enviar'} pelo WhatsApp${ctx.cels.length === 1 ? ' ' + esc(ctx.cels[0].valor) : ''}</button>`;
   }
   if (it.st !== ST.INVALIDO) acoes += `<button class="btn perigo peq" data-acao="INVALIDO" data-k="${k}">✖ Inválido</button>`;
   const hist = it.regs.slice(0, 5).map(r =>
-    `<div>${dataBR(r.dt)} · ${esc(r.u)} · ${esc(r.cn || '')} · ${esc((ST_INFO[r.st] || [r.st])[0])}${r.rs ? ' em ' + dataBR(r.rs) : ''}${r.local ? ' <span class="nsinc">⏳ não sincronizado</span>' : ''}</div>`).join('');
+    `<div>${dataBR(r.dt)} · ${esc(r.u)} · ${esc(r.cn || '')}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''} · ${esc((ST_INFO[r.st] || [r.st])[0])}${r.rs ? ' em ' + dataBR(r.rs) : ''}${r.local ? ' <span class="nsinc">⏳ não sincronizado</span>' : ''}</div>`).join('');
   return `<div class="item">
     <div class="val">${esc(it.valor)}</div>
     <div class="meta">${tipoChip}${it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>'}<span>Origem: ${esc(it.origem)}</span></div>
@@ -452,43 +456,55 @@ function cardItem(it) {
   </div>`;
 }
 
-function mensagemConfirmacao(cli, contato, link, tipo) {
+function mensagemConfirmacao(cli, contato, link, regs) {
   const ola = contato ? `Olá, ${contato}!` : 'Olá!';
+  const tel = regs.filter(r => r.tp !== 'EMAIL').map(r => r.vi);
+  const em = regs.filter(r => r.tp === 'EMAIL').map(r => r.vi);
+  const partes = [];
+  if (tel.length) partes.push('o telefone ' + tel.join(', '));
+  if (em.length) partes.push('o e-mail ' + em.join(', '));
   return `${ola} Aqui é da ${C.EMPRESA}. Estamos atualizando o cadastro de ${cli.s || cli.r}.\n\n` +
-    `Para confirmar que este ${tipo} é seu, toque no link abaixo:\n${link}\n\nObrigado!`;
+    `Por favor, confirme ${partes.join(' e ')} tocando no link abaixo:\n${link}\n\nObrigado!`;
 }
 
-function executar(cli, it, acao) {
+function executar(cli, it, acao, itens, card) {
   const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
-  const token = uid(24);
-  const link = C.API_URL + '?t=' + token;
-  const reg = {
-    id: novoId(), token, dt: new Date().toISOString(), usuario: S.sess.usuario, auth: S.sess.token,
-    c: cli.c, ct: contato, tp: it.tp === 'REVISAR' ? 'FIXO' : it.tp, or: it.origem, vb: it.vb || '', vi: it.valor, cn: '', acao: 'ENVIO'
-  };
-  if (acao === 'WHATS') {
-    reg.cn = 'WHATSAPP';
-    const url = 'https://wa.me/' + it.n.intl + '?text=' + encodeURIComponent(mensagemConfirmacao(cli, contato, link, 'número'));
-    gravar(reg); abrirLink(url);
-  } else if (acao === 'SMS') {
-    reg.cn = 'SMS';
-    const url = 'sms:+' + it.n.intl + '?&body=' + encodeURIComponent(mensagemConfirmacao(cli, contato, link, 'número'));
-    gravar(reg); abrirLink(url);
-  } else if (acao === 'EMAIL') {
-    reg.cn = 'EMAIL';
-    gravar(reg); toast(online() ? 'E-mail será enviado pela planilha' : 'Sem internet: o e-mail será enviado quando a conexão voltar');
-  } else if (acao === 'CONFERIDO') {
-    reg.cn = 'NENHUM'; reg.acao = 'CONFERIDO'; reg.token = '';
-    gravar(reg); toast('Telefone fixo marcado como conferido');
-  } else if (acao === 'INVALIDO') {
+  const novo = (item, extra) => Object.assign({
+    id: novoId(), token: '', dt: new Date().toISOString(), usuario: S.sess.usuario, auth: S.sess.token,
+    c: cli.c, ct: contato, tp: item.tp === 'REVISAR' ? 'FIXO' : item.tp, or: item.origem, vb: item.vb || '', vi: item.valor,
+    cn: 'NENHUM', pa: '', acao: 'ENVIO'
+  }, extra || {});
+
+  if (acao === 'CONFERIDO') { gravar([novo(it, { acao: 'CONFERIDO' })]); return toast('Telefone fixo marcado como conferido'); }
+  if (acao === 'INVALIDO') {
     if (!confirm('Marcar ' + it.valor + ' como inválido?')) return;
-    reg.cn = 'NENHUM'; reg.acao = 'INVALIDO'; reg.token = '';
-    gravar(reg); toast('Marcado como inválido');
+    gravar([novo(it, { acao: 'INVALIDO' })]); return toast('Marcado como inválido');
   }
+
+  // Envio pelo WhatsApp / SMS
+  let cel, alvos;
+  if (acao === 'EMAIL') {
+    const sel = card && card.querySelector('.selCel');
+    cel = sel ? itens.find(i => i.k === sel.value) : itens.find(i => i.tp === 'CELULAR' && i.st !== ST.INVALIDO && i.st !== ST.RECUSADO);
+    if (!cel) return toast('Adicione um celular para enviar a confirmação do e-mail.');
+    alvos = [it];
+  } else {
+    cel = it;
+    alvos = [it];
+    const inc = card && card.querySelector('.incE');
+    if (inc && inc.checked) itens.filter(i => i.tp === 'EMAIL' && i.st !== ST.CONFIRMADO && i.st !== ST.INVALIDO).forEach(e => alvos.push(e));
+  }
+  const canal = acao === 'SMS' ? 'SMS' : 'WHATSAPP';
+  const regs = alvos.map(a => novo(a, { token: (a.tp === 'EMAIL' ? 'e' : 'f') + uid(20), cn: canal, pa: cel.valor }));
+  const link = C.API_URL + '?t=' + regs.map(r => r.token).join('-');
+  const msg = encodeURIComponent(mensagemConfirmacao(cli, contato, link, regs));
+  const url = canal === 'SMS' ? 'sms:+' + cel.n.intl + '?&body=' + msg : 'https://wa.me/' + cel.n.intl + '?text=' + msg;
+  gravar(regs);
+  abrirLink(url);
 }
 
-function gravar(reg) {
-  fila.add(reg);            // 1º grava no aparelho (nunca se perde)
+function gravar(regs) {
+  const f = fila.ler(); regs.forEach(r => f.push(r)); fila.gravar(f);   // 1º grava no aparelho (nunca se perde)
   reindexar(); renderItens(); barra();
   setTimeout(() => sincronizar(), 300);
 }
@@ -521,7 +537,7 @@ function renderPainel() {
     else if (AGUARDA.has(r.st)) o.pend++;
     else if (r.st === ST.RECUSADO) o.rec++;
     else if (r.st === ST.FIXO) o.fixo++;
-    else if (r.st === ST.INVALIDO || r.st === ST.ERRO_EMAIL) o.inv++;
+    else if (r.st === ST.INVALIDO) o.inv++;
   });
   // carteira por vendedor (supervisor)
   const porV = {};
@@ -556,7 +572,7 @@ function renderPainel() {
     </div>
     <div class="scroll"><table class="tb">
       <tr><th>Data</th><th>Usuário</th><th>Cliente</th><th>Contato</th><th>Status</th></tr>
-      ${filtrados.map(r => { const c = cliPorCod.get(r.c); return `<tr data-cli="${esc(r.c)}" style="cursor:pointer"><td>${dataBR(r.dt)}${r.local ? ' ⏳' : ''}</td><td>${esc(r.u)}</td><td>${esc(c ? (c.s || c.r) : r.c)}</td><td>${esc(r.vi)}<br><small>${esc(r.tp)} · ${esc(r.cn)}</small></td><td>${chip(r.st)}${r.rs ? '<br><small>' + dataBR(r.rs) + '</small>' : ''}</td></tr>`; }).join('') || '<tr><td colspan="5" class="vazio">Sem registros.</td></tr>'}
+      ${filtrados.map(r => { const c = cliPorCod.get(r.c); return `<tr data-cli="${esc(r.c)}" style="cursor:pointer"><td>${dataBR(r.dt)}${r.local ? ' ⏳' : ''}</td><td>${esc(r.u)}</td><td>${esc(c ? (c.s || c.r) : r.c)}</td><td>${esc(r.vi)}<br><small>${esc(r.tp)} · ${esc(r.cn)}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''}</small></td><td>${chip(r.st)}${r.rs ? '<br><small>' + dataBR(r.rs) + '</small>' : ''}</td></tr>`; }).join('') || '<tr><td colspan="5" class="vazio">Sem registros.</td></tr>'}
     </table></div>
   </div>`;
   $('#pu').onchange = e => { S.pf.u = e.target.value; renderPainel(); };

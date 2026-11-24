@@ -1,6 +1,6 @@
 /* Service worker: deixa o app abrir sem internet.
    Ao publicar uma versão nova, aumente o número da VERSAO. */
-const VERSAO = 'lince-cadastro-v1';
+const VERSAO = 'lince-cadastro-v2';
 const ARQUIVOS = ['./', './index.html', './app.js', './fone.js', './config.js', './manifest.json',
   './logo.png', './logo-branca.png', './icon-192.png', './icon-512.png'];
 
