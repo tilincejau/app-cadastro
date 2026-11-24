@@ -18,7 +18,8 @@ const ST_INFO = {
   CONFIRMADO: ['Confirmado', 'verde'],
   RECUSADO: ['Dono recusou', 'verm'],
   'FIXO CONFERIDO': ['Fixo conferido', 'verde'],
-  INVALIDO: ['Inválido', 'cinza']
+  INVALIDO: ['Inválido', 'cinza'],
+  'NOVO - NAO ENVIADO': ['Novo · enviar', 'azul']
 };
 const RESOLVIDO = new Set([ST.CONFIRMADO, ST.RECUSADO, ST.FIXO, ST.INVALIDO]);
 const AGUARDA = new Set([ST.PENDENTE]);
@@ -109,6 +110,7 @@ function salvarDados() {
 function statusLocal(it) {
   if (it.acao === 'CONFERIDO') return ST.FIXO;
   if (it.acao === 'INVALIDO') return ST.INVALIDO;
+  if (it.acao === 'NOVO') return 'NOVO - NAO ENVIADO';
   return ST.PENDENTE;
 }
 
@@ -138,7 +140,7 @@ function itensDoCliente(cli) {
   const addFone = (raw, origem, vb) => {
     const n = normFone(raw, C.DDD_PADRAO); if (!n) return;
     const k = 'T' + n.chave; if (vistos.has(k)) return; vistos.add(k);
-    itens.push({ k, tp: n.tipo, valor: n.fmt, n, origem, vb });
+    itens.push({ k, tp: n.tipo, valor: n.padrao, n, origem, vb });
   };
   const addEmail = (raw, origem, vb) => {
     const e = normEmail(raw); if (!e) return;
@@ -147,7 +149,7 @@ function itensDoCliente(cli) {
   };
   (cli.f || []).forEach((raw, i) => addFone(raw, CAMPOS_FONE[i], raw));
   addEmail(cli.e, 'Email-NF-e', cli.e);
-  (S.extras[cli.c] || []).forEach(x => x.tp === 'EMAIL' ? addEmail(x.valor, 'NOVO', '') : addFone(x.valor, 'NOVO', ''));
+  (S.extras[cli.c] || []).forEach(x => x.tp === 'EMAIL' ? addEmail(x.valor, x.origem || 'NOVO', '') : addFone(x.valor, x.origem || 'NOVO', ''));
   regs.forEach(r => r.tp === 'EMAIL' ? addEmail(r.vi, r.or || 'NOVO', r.vb) : addFone(r.vi, r.or || 'NOVO', r.vb));
   itens.forEach(it => {
     it.regs = regs.filter(r => chaveReg(r) === it.k);
@@ -393,36 +395,125 @@ function renderDetalhe() {
     <input class="in" id="contato" value="${esc(contatoSalvo != null ? contatoSalvo : cli.ct)}">
   </div>
   <div class="box"><h3>Telefones</h3><div id="itensT"></div>
-    <div class="add"><input class="in" id="novoT" type="tel" inputmode="tel" placeholder="Adicionar telefone com DDD"><button class="btn ouro" id="addT">+ Adicionar</button></div>
+    <div class="add"><input class="in" id="novoT" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000"><button class="btn ouro" id="addT">+ Adicionar</button></div>
   </div>
   <div class="box"><h3>E-mail</h3><div id="itensE"></div>
-    <div class="add"><input class="in" id="novoE" type="email" inputmode="email" placeholder="Adicionar / corrigir e-mail"><button class="btn ouro" id="addE">+ Adicionar</button></div>
+    <div class="add"><input class="in" id="novoE" type="email" inputmode="email" autocapitalize="none" placeholder="Adicionar e-mail"><button class="btn ouro" id="addE">+ Adicionar</button></div>
   </div>`;
   $('#contato').onchange = e => LS.set('contato_' + cli.c, e.target.value.trim());
+  aplicarMascara($('#novoT'));
   $('#addT').onclick = () => {
-    const v = $('#novoT').value; const n = normFone(v, C.DDD_PADRAO);
-    if (!n || n.tipo === 'REVISAR') return toast('Telefone inválido. Use DDD + número.');
-    adicionarExtra(cli, 'FONE', n.fmt); $('#novoT').value = '';
+    const v = validarFone($('#novoT').value);
+    if (!v.ok) return toast(v.erro, 4500);
+    if (jaExiste(cli, 'T' + v.chave)) return toast('Esse telefone já está no cadastro.');
+    gravar([registrarNovo(cli, 'FONE', v.padrao, 'NOVO')]); adicionarExtra(cli, 'FONE', v.padrao, 'NOVO'); $('#novoT').value = '';
   };
   $('#addE').onclick = () => {
     const v = normEmail($('#novoE').value);
     if (!emailValido(v)) return toast('E-mail inválido.');
-    adicionarExtra(cli, 'EMAIL', v); $('#novoE').value = '';
+    if (jaExiste(cli, 'E' + v)) return toast('Esse e-mail já está no cadastro.');
+    gravar([registrarNovo(cli, 'EMAIL', v, 'NOVO')]); adicionarExtra(cli, 'EMAIL', v, 'NOVO'); $('#novoE').value = '';
   };
   renderItens();
 }
 
-function adicionarExtra(cli, tp, valor) {
+function adicionarExtra(cli, tp, valor, origem, silencioso) {
   const l = S.extras[cli.c] = S.extras[cli.c] || [];
-  l.push({ tp, valor });
+  l.push({ tp, valor, origem: origem || 'NOVO' });
   LS.set('extras_' + S.sess.usuario, S.extras);
-  renderItens(); toast('Adicionado. Agora envie a confirmação.');
+  renderItens(); if (!silencioso) toast('Adicionado. Agora envie a confirmação.');
+}
+
+/** Cria um registro (vai para a fila do aparelho e depois para a planilha). */
+function novoReg(cli, item, extra) {
+  const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
+  return Object.assign({
+    id: novoId(), token: '', dt: new Date().toISOString(), usuario: S.sess.usuario, auth: S.sess.token,
+    c: cli.c, ct: contato, tp: item.tp === 'REVISAR' ? 'FIXO' : item.tp, or: item.origem, vb: item.vb || '', vi: item.valor,
+    cn: 'NENHUM', pa: '', acao: 'ENVIO'
+  }, extra || {});
+}
+
+/** Registra na planilha um contato novo digitado pelo vendedor (ainda sem envio). */
+function registrarNovo(cli, tp, valor, origem) {
+  const n = tp === 'EMAIL' ? null : normFone(valor);
+  return novoReg(cli, { tp: tp === 'EMAIL' ? 'EMAIL' : (n ? n.tipo : 'FIXO'), origem, valor }, { acao: 'NOVO' });
+}
+
+function jaExiste(cli, k) {
+  return itensDoCliente(cli).some(i => i.k === k && i.st !== ST.INVALIDO);
+}
+
+function aplicarMascara(inp) {
+  inp.addEventListener('input', () => { inp.value = mascaraFone(inp.value); });
+}
+
+/** Inválido: o contato sai da lista e o vendedor é obrigado a digitar o novo. */
+function pedirSubstituto(cli, it, restantes, registrarInvalido) {
+  const email = it.tp === 'EMAIL';
+  const fundo = document.createElement('div');
+  fundo.className = 'modal-fundo';
+  const opcional = restantes.length > 0;
+  const nomeTipo = email ? 'e-mail' : 'número';
+  fundo.innerHTML = `<div class="modal">
+    <div class="modal-t">${email ? '📧 E-mail inválido' : '📱 Telefone inválido'}</div>
+    <div class="modal-old">${esc(it.valor)}</div>
+    ${opcional ? `<div id="passo1">
+      <p>O cliente ainda tem ${restantes.length > 1 ? 'estes' : 'este'} ${nomeTipo}${restantes.length > 1 ? 's' : ''}:</p>
+      <div class="modal-rest">${restantes.map(r => `<div>${email ? '📧' : '📱'} <b>${esc(r.valor)}</b></div>`).join('')}</div>
+      <p>Quer adicionar outro ${nomeTipo} ou manter só ${restantes.length > 1 ? 'esses' : 'esse'}?</p>
+      <div class="modal-b col">
+        <button class="btn" id="opAdd">➕ Adicionar outro ${nomeTipo}</button>
+        <button class="btn sec" id="opManter">✔ Manter só ${restantes.length > 1 ? 'os que restaram' : 'o que restou'}</button>
+        <button class="btn perigo" id="opCanc">Cancelar</button>
+      </div>
+    </div>` : ''}
+    <div id="passo2" ${opcional ? 'class="hide"' : ''}>
+    <p>Este ${email ? 'e-mail' : 'número'} será removido. Digite o ${email ? 'e-mail' : 'telefone'} correto do cliente:</p>
+    ${email
+      ? '<input class="in" id="subst" type="email" inputmode="email" autocapitalize="none" placeholder="nome@exemplo.com.br">'
+      : '<input class="in" id="subst" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000"><div class="dica">Celular: 014-99798-3516 · Fixo: 014-03667-1211</div>'}
+    <div class="modal-erro" id="substErro"></div>
+    <div class="modal-b"><button class="btn sec" id="substCanc">Cancelar</button><button class="btn" id="substOk">Salvar</button></div>
+    </div>
+  </div>`;
+  document.body.appendChild(fundo);
+  const inp = $('#subst', fundo), err = $('#substErro', fundo);
+  if (!email) aplicarMascara(inp);
+  const fechar = () => fundo.remove();
+  if (opcional) {
+    $('#opCanc', fundo).onclick = fechar;
+    $('#opManter', fundo).onclick = () => { registrarInvalido(); fechar(); toast('Removido. ' + (email ? 'E-mail' : 'Número') + ' marcado como inválido.'); };
+    $('#opAdd', fundo).onclick = () => { $('#passo1', fundo).classList.add('hide'); $('#passo2', fundo).classList.remove('hide'); setTimeout(() => inp.focus(), 50); };
+  } else setTimeout(() => inp.focus(), 50);
+  $('#substCanc', fundo).onclick = fechar;
+  const salvar = () => {
+    let valor, k, tp;
+    if (email) {
+      valor = normEmail(inp.value);
+      if (!emailValido(valor)) { err.textContent = 'Digite um e-mail válido.'; return; }
+      k = 'E' + valor; tp = 'EMAIL';
+    } else {
+      const v = validarFone(inp.value);
+      if (!v.ok) { err.textContent = v.erro; return; }
+      valor = v.padrao; k = 'T' + v.chave; tp = 'FONE';
+    }
+    if (k === it.k) { err.textContent = 'Digite um contato diferente do inválido.'; return; }
+    if (jaExiste(cli, k)) { err.textContent = 'Esse contato já está no cadastro.'; return; }
+    registrarInvalido(registrarNovo(cli, tp, valor, 'Substitui ' + it.valor));
+    adicionarExtra(cli, tp, valor, 'Substitui ' + it.valor, true);
+    fechar();
+    toast('Contato substituído. Agora envie a confirmação do novo.', 3500);
+  };
+  $('#substOk', fundo).onclick = salvar;
+  inp.onkeydown = e => { if (e.key === 'Enter') salvar(); };
 }
 
 function renderItens() {
   const cli = clienteAtual(); if (!cli || !$('#itensT')) return;
   const itens = itensDoCliente(cli);
-  const tel = itens.filter(i => i.tp !== 'EMAIL'), em = itens.filter(i => i.tp === 'EMAIL');
+  const vis = itens.filter(i => i.st !== ST.INVALIDO);   // inválidos saem da lista
+  const tel = vis.filter(i => i.tp !== 'EMAIL'), em = vis.filter(i => i.tp === 'EMAIL');
   const cels = tel.filter(i => i.tp === 'CELULAR' && i.st !== ST.INVALIDO && i.st !== ST.RECUSADO);
   const emPend = em.filter(i => i.st !== ST.CONFIRMADO && i.st !== ST.INVALIDO);
   const ctx = { cels, emPend };
@@ -438,7 +529,7 @@ function renderItens() {
 
 function cardItem(it, ctx) {
   const tipoChip = it.tp === 'CELULAR' ? '<span class="chip azul">Celular</span>' : it.tp === 'FIXO' ? '<span class="chip cinza">Fixo</span>' : it.tp === 'EMAIL' ? '<span class="chip azul">E-mail</span>' : '<span class="chip verm">Revisar número</span>';
-  const jaFoi = it.regs.length > 0;
+  const jaFoi = it.regs.some(r => r.cn && r.cn !== 'NENHUM');
   let acoes = '';
   const k = esc(it.k);
   if (it.tp === 'CELULAR') {
@@ -472,7 +563,7 @@ function nomeBonito(s) {
 
 function mensagemConfirmacao(cli, contato, link, regs) {
   const primeiro = nomeBonito(String(contato || '').split(/[\s\/]+/)[0]);
-  const tel = regs.filter(r => r.tp !== 'EMAIL').map(r => r.vi);
+  const tel = regs.filter(r => r.tp !== 'EMAIL').map(r => { const n = normFone(r.vi); return n ? n.fmt : r.vi; });
   const em = regs.filter(r => r.tp === 'EMAIL').map(r => r.vi);
   const linhas = [
     `🌾 *${C.EMPRESA}*`,
@@ -498,16 +589,13 @@ function urlConfirmacao(tokens) {
 
 function executar(cli, it, acao, itens, card) {
   const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
-  const novo = (item, extra) => Object.assign({
-    id: novoId(), token: '', dt: new Date().toISOString(), usuario: S.sess.usuario, auth: S.sess.token,
-    c: cli.c, ct: contato, tp: item.tp === 'REVISAR' ? 'FIXO' : item.tp, or: item.origem, vb: item.vb || '', vi: item.valor,
-    cn: 'NENHUM', pa: '', acao: 'ENVIO'
-  }, extra || {});
+  const novo = (item, extra) => novoReg(cli, item, extra);
 
   if (acao === 'CONFERIDO') { gravar([novo(it, { acao: 'CONFERIDO' })]); return toast('Telefone fixo marcado como conferido'); }
   if (acao === 'INVALIDO') {
-    if (!confirm('Marcar ' + it.valor + ' como inválido?')) return;
-    gravar([novo(it, { acao: 'INVALIDO' })]); return toast('Marcado como inválido');
+    const mesmoGrupo = i => (i.tp === 'EMAIL') === (it.tp === 'EMAIL');
+    const restantes = itens.filter(i => i.k !== it.k && i.st !== ST.INVALIDO && mesmoGrupo(i));
+    return pedirSubstituto(cli, it, restantes, regNovo => gravar([novo(it, { acao: 'INVALIDO' })].concat(regNovo ? [regNovo] : [])));
   }
 
   // Envio pelo WhatsApp / SMS
@@ -588,12 +676,16 @@ function renderPainel() {
   const usuarios = Object.keys(porU).sort();
   const filtrados = regs.filter(r => (!S.pf.u || r.u === S.pf.u) && (!S.pf.st || r.st === S.pf.st)).slice(0, 300);
 
-  const tabela = (titulo, rot, mapa) => `<div class="box"><h3>${titulo}</h3><div class="scroll"><table class="tb">
-    <tr><th>${rot}</th><th>Clientes</th><th>Iniciados</th><th>Aguard.</th><th>Concl.</th><th>%</th></tr>
-    ${Object.keys(mapa).sort((a, b) => a - b).map(v => { const o = mapa[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td>${o.ag}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div>${p}%</td></tr>`; }).join('')}
-  </table></div></div>`;
+  const tabela = (titulo, rot, mapa) => `<div class="box"><h3>${titulo}</h3><table class="tb fix">
+    <tr><th>${rot}</th><th>Cli.</th><th>Inic.</th><th>Aguard.</th><th>OK</th><th style="width:28%">Progresso</th></tr>
+    ${Object.keys(mapa).sort((a, b) => a - b).map(v => { const o = mapa[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td>${o.ag}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div><small>${p}%</small></td></tr>`; }).join('')}
+  </table></div>`;
+  const resumoU = o => `<div class="mini">
+      <div><b>${o.env}</b><span>Enviados</span></div><div class="v"><b>${o.conf}</b><span>Confirm.</span></div>
+      <div class="o"><b>${o.pend}</b><span>Aguard.</span></div><div class="r"><b>${o.rec}</b><span>Recus.</span></div>
+      <div><b>${o.fixo}</b><span>Fixos</span></div><div><b>${o.inv}</b><span>Inválid.</span></div></div>`;
   $('#main').innerHTML = `
-  ${ger ? `<select class="in" id="pmesa" style="margin-bottom:10px"><option value="">Todas as mesas</option>${Object.keys(porM).sort((a, b) => a - b).map(m => `<option value="${esc(m)}" ${S.f.mesa === m ? 'selected' : ''}>Mesa ${esc(m)}</option>`).join('')}</select>` : ''}
+  ${ger ? `<select class="in" id="pmesa" style="margin-bottom:8px"><option value="">Todas as mesas</option>${Object.keys(porM).sort((a, b) => a - b).map(m => `<option value="${esc(m)}" ${S.f.mesa === m ? 'selected' : ''}>Mesa ${esc(m)}</option>`).join('')}</select>` : ''}
   <div class="cards">
     <div class="kpi"><div class="n">${calc.length}</div><div class="t">Clientes ${ger ? (S.f.mesa ? 'da mesa ' + esc(S.f.mesa) : 'no total') : sup ? 'da mesa' : 'na carteira'}</div></div>
     <div class="kpi o"><div class="n">${calc.length - cont.NI}</div><div class="t">Iniciados</div></div>
@@ -602,24 +694,26 @@ function renderPainel() {
   </div>
   ${ger && !S.f.mesa ? tabela('Progresso por mesa', 'Mesa', porM) : ''}
   ${sup ? tabela('Carteira por vendedor', 'Vend.', porV) : ''}
-  <div class="box"><h3>${sup ? 'Ações por usuário' : 'Resumo dos meus envios'}</h3><div class="scroll"><table class="tb">
-    <tr><th>Usuário</th><th>Enviados</th><th>Confirm.</th><th>Aguard.</th><th>Recus.</th><th>Fixos</th><th>Inválidos</th></tr>
-    ${usuarios.map(u => { const o = porU[u]; return `<tr><td><b>${esc(u)}</b></td><td>${o.env}</td><td>${o.conf}</td><td>${o.pend}</td><td>${o.rec}</td><td>${o.fixo}</td><td>${o.inv}</td></tr>`; }).join('') || '<tr><td colspan="7" class="vazio">Nada enviado ainda.</td></tr>'}
-  </table></div></div>
+  <div class="box"><h3>${sup ? 'Ações por usuário' : 'Resumo dos meus envios'}</h3>
+    ${usuarios.length ? usuarios.map(u => (sup ? `<div class="mini-u">Usuário <b>${esc(u)}</b></div>` : '') + resumoU(porU[u])).join('') : '<div class="vazio">Nada enviado ainda.</div>'}
+  </div>
   <div class="box"><h3>Histórico</h3>
-    <div class="filtros" style="border:0;padding:0;margin-bottom:8px">
-      <select class="in" id="pu"><option value="">Todos usuários</option>${usuarios.map(u => `<option ${S.pf.u === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>
-      <select class="in" id="pst"><option value="">Todos status</option>${Object.keys(ST_INFO).map(s => `<option value="${esc(s)}" ${S.pf.st === s ? 'selected' : ''}>${esc(ST_INFO[s][0])}</option>`).join('')}</select>
+    <div class="filtros" style="border:0;padding:0;margin-bottom:6px;${sup ? '' : 'grid-template-columns:1fr'}">
+      ${sup ? `<select class="in" id="pu"><option value="">Todos usuários</option>${usuarios.map(u => `<option ${S.pf.u === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>` : ''}
+      <select class="in" id="pst"><option value="">Todos os status</option>${Object.keys(ST_INFO).map(s => `<option value="${esc(s)}" ${S.pf.st === s ? 'selected' : ''}>${esc(ST_INFO[s][0])}</option>`).join('')}</select>
     </div>
-    <div class="scroll"><table class="tb">
-      <tr><th>Data</th><th>Usuário</th><th>Cliente</th><th>Contato</th><th>Status</th></tr>
-      ${filtrados.map(r => { const c = cliPorCod.get(r.c); return `<tr data-cli="${esc(r.c)}" style="cursor:pointer"><td>${dataBR(r.dt)}${r.local ? ' ⏳' : ''}</td><td>${esc(r.u)}</td><td>${esc(c ? (c.s || c.r) : r.c)}</td><td>${esc(r.vi)}<br><small>${esc(r.tp)} · ${esc(r.cn)}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''}</small></td><td>${chip(r.st)}${r.rs ? '<br><small>' + dataBR(r.rs) + '</small>' : ''}</td></tr>`; }).join('') || '<tr><td colspan="5" class="vazio">Sem registros.</td></tr>'}
-    </table></div>
+    <div class="hl">
+      ${filtrados.map(r => { const c = cliPorCod.get(r.c); return `<div class="hr" data-cli="${esc(r.c)}">
+        <div class="hr1"><b>${esc(c ? (c.s || c.r) : r.c)}</b>${chip(r.st)}</div>
+        <div class="hr2">${r.tp === 'EMAIL' ? '📧' : '📱'} ${esc(r.vi)}</div>
+        <div class="hr3">${dataBR(r.dt)}${sup ? ' · ' + esc(r.u) : ''} · ${esc(r.cn === 'NENHUM' ? 'sem envio' : r.cn)}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''}${r.rs ? ' · respondido ' + dataBR(r.rs) : ''}${r.local ? ' · <span class="nsinc">⏳ não sincronizado</span>' : ''}</div>
+      </div>`; }).join('') || '<div class="vazio">Sem registros.</div>'}
+    </div>
   </div>`;
   if ($('#pmesa')) $('#pmesa').onchange = e => { S.f.mesa = e.target.value; renderPainel(); };
-  $('#pu').onchange = e => { S.pf.u = e.target.value; renderPainel(); };
+  if ($('#pu')) $('#pu').onchange = e => { S.pf.u = e.target.value; renderPainel(); };
   $('#pst').onchange = e => { S.pf.st = e.target.value; renderPainel(); };
-  $('#main').querySelectorAll('tr[data-cli]').forEach(tr => tr.onclick = () => {
+  $('#main').querySelectorAll('.hr[data-cli]').forEach(tr => tr.onclick = () => {
     if (!cliPorCod.has(tr.dataset.cli)) return;
     S.cli = tr.dataset.cli; S.view = 'detalhe'; render(); window.scrollTo(0, 0);
   });
