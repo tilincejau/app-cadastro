@@ -5,6 +5,11 @@ window.CONFIG = {
 
   EMPRESA: 'Lince Distribuidora',
 
+  // Endereço da página de confirmação enviada no WhatsApp.
+  // Vazio = usa automaticamente o endereço onde o app está publicado (…/c.html).
+  // Com domínio próprio, ex.: 'https://cadastro.lincejau.com.br/c.html'
+  URL_CONFIRMACAO: '',
+
   // DDD usado quando o número da base vier sem DDD
   DDD_PADRAO: '14',
 

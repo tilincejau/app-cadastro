@@ -463,15 +463,37 @@ function cardItem(it, ctx) {
   </div>`;
 }
 
+function nomeBonito(s) {
+  const minus = ['da', 'de', 'do', 'das', 'dos', 'e'];
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim().split(' ')
+    .map((w, i) => (i && minus.includes(w)) ? w : (/^(ltda|me|epp|eireli|s\/a|sa)$/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
 function mensagemConfirmacao(cli, contato, link, regs) {
-  const ola = contato ? `Olá, ${contato}!` : 'Olá!';
+  const primeiro = nomeBonito(String(contato || '').split(/[\s\/]+/)[0]);
   const tel = regs.filter(r => r.tp !== 'EMAIL').map(r => r.vi);
   const em = regs.filter(r => r.tp === 'EMAIL').map(r => r.vi);
-  const partes = [];
-  if (tel.length) partes.push('o telefone ' + tel.join(', '));
-  if (em.length) partes.push('o e-mail ' + em.join(', '));
-  return `${ola} Aqui é da ${C.EMPRESA}. Estamos atualizando o cadastro de ${cli.s || cli.r}.\n\n` +
-    `Por favor, confirme ${partes.join(' e ')} tocando no link abaixo:\n${link}\n\nObrigado!`;
+  const linhas = [
+    `🌾 *${C.EMPRESA}*`,
+    '',
+    `Olá${primeiro ? ', *' + primeiro + '*' : ''}! 👋`,
+    `Estamos atualizando o cadastro de *${nomeBonito(cli.s || cli.r)}* para continuar te atendendo cada vez melhor. 💚`,
+    '',
+    `Pode confirmar ${tel.length + em.length > 1 ? 'seus contatos' : 'seu contato'}? Leva só *10 segundos* ⏱️`,
+    ''
+  ];
+  tel.forEach(t => linhas.push(`📱 Telefone: *${t}*`));
+  em.forEach(e => linhas.push(`📧 E-mail: *${e}*`));
+  linhas.push('', '👉 *Toque no link para confirmar:*', link, '',
+    '🔒 _É só um clique para dizer se o contato é seu. Nunca pedimos senhas, códigos ou pagamentos._', '',
+    'Obrigado pela parceria! 🤝');
+  return linhas.join('\n');
+}
+
+function urlConfirmacao(tokens) {
+  const base = C.URL_CONFIRMACAO || new URL('c.html', location.href).href.split('?')[0];
+  return base + '?t=' + tokens.join('-');
 }
 
 function executar(cli, it, acao, itens, card) {
@@ -502,8 +524,8 @@ function executar(cli, it, acao, itens, card) {
     if (inc && inc.checked) itens.filter(i => i.tp === 'EMAIL' && i.st !== ST.CONFIRMADO && i.st !== ST.INVALIDO).forEach(e => alvos.push(e));
   }
   const canal = acao === 'SMS' ? 'SMS' : 'WHATSAPP';
-  const regs = alvos.map(a => novo(a, { token: (a.tp === 'EMAIL' ? 'e' : 'f') + uid(20), cn: canal, pa: cel.valor }));
-  const link = C.API_URL + '?t=' + regs.map(r => r.token).join('-');
+  const regs = alvos.map(a => novo(a, { token: (a.tp === 'EMAIL' ? 'e' : 'f') + uid(11), cn: canal, pa: cel.valor }));
+  const link = urlConfirmacao(regs.map(r => r.token));
   const msg = encodeURIComponent(mensagemConfirmacao(cli, contato, link, regs));
   const url = canal === 'SMS' ? 'sms:+' + cel.n.intl + '?&body=' + msg : 'https://wa.me/' + cel.n.intl + '?text=' + msg;
   gravar(regs);

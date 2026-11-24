@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#154027">
+<title>Lince Distribuidora · Confirmação de cadastro</title>
+<!-- Prévia do link no WhatsApp (troque SEU-ENDERECO pelo endereço do app no GitHub, ver LEIA-ME) -->
+<meta property="og:site_name" content="Lince Distribuidora">
+<meta property="og:title" content="🌾 Lince Distribuidora · Confirme seu cadastro">
+<meta property="og:description" content="Toque para confirmar seu telefone e e-mail. Leva só 10 segundos.">
+<meta property="og:image" content="SEU-ENDERECO/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+:root{--verde:#154027;--verde2:#1f5a37;--ouro:#C49F46;--fundo:#f4f6f3;--mut:#6b7a70;--borda:#dde3de}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--fundo);color:#1d2b22}
+.topo{background:linear-gradient(160deg,var(--verde2),var(--verde));padding:26px 20px 70px;text-align:center}
+.topo img{width:210px;max-width:70%}
+.card{max-width:440px;margin:-50px auto 20px;background:#fff;border-radius:18px;padding:24px 20px;box-shadow:0 10px 30px rgba(21,64,39,.15)}
+h1{font-size:20px;margin:0 0 6px;color:var(--verde);text-align:center}
+.sub{text-align:center;color:var(--mut);font-size:15px;margin:0 0 18px;line-height:1.45}
+.it{border:1.5px solid var(--borda);border-radius:14px;padding:16px;margin:12px 0;transition:.2s}
+.it.ok{border-color:var(--verde);background:#eef5f0}
+.it.no{border-color:#e3c2c2;background:#fdf5f5}
+.rot{font-size:12px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+.val{font-size:20px;font-weight:800;color:var(--verde);margin:6px 0 12px;word-break:break-all}
+.bt{display:flex;gap:8px}
+button{flex:1;border:0;border-radius:12px;padding:15px 8px;font-size:16px;font-weight:700;cursor:pointer}
+.sim{background:var(--verde);color:#fff}
+.nao{background:#fff;color:#8a1c1c;border:2px solid #e3c2c2}
+.res{font-weight:700;font-size:16px;text-align:center;padding:6px 0}
+.it.ok .res{color:var(--verde)} .it.no .res{color:#8a1c1c}
+.fim{display:none;text-align:center;padding:10px 0 0}
+.fim .em{font-size:46px}
+.fim b{color:var(--verde);font-size:18px}
+.seg{display:flex;gap:10px;align-items:flex-start;background:#f6efdd;border-radius:12px;padding:12px;font-size:13px;color:#5d4a14;margin-top:18px;line-height:1.4}
+.rod{text-align:center;color:var(--mut);font-size:12px;margin:10px 0 30px}
+.linha{height:3px;width:56px;background:var(--ouro);border-radius:3px;margin:0 auto 14px}
+.load{text-align:center;color:var(--mut);padding:30px 0}
+</style>
+</head>
+<body>
+<div class="topo"><img src="logo-branca.png" alt="Lince Distribuidora"></div>
+<div class="card">
+  <div class="linha"></div>
+  <h1>Confirmação de cadastro</h1>
+  <p class="sub" id="sub">Carregando…</p>
+  <div id="itens"><div class="load">⏳</div></div>
+  <div class="fim" id="fim"><div class="em">🎉</div><b>Tudo certo, obrigado!</b><p class="sub" style="margin-top:6px">Seu cadastro na Lince Distribuidora está atualizado. Pode fechar esta página.</p></div>
+  <div class="seg"><span style="font-size:18px">🔒</span><span><b>Página segura da Lince Distribuidora.</b> Aqui você só confirma se o contato é seu. Nunca pedimos senhas, códigos, dados de cartão ou pagamentos.</span></div>
+</div>
+<p class="rod">Lince Distribuidora</p>
+<script src="config.js"></script>
+<script>
+(function () {
+  var API = window.CONFIG.API_URL;
+  var t = (new URLSearchParams(location.search).get('t') || '').replace(/[^a-z0-9\-]/gi, '');
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function api(body) {
+    return fetch(API, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j.ok) throw new Error(j.erro || 'erro'); return j; });
+  }
+  var itens = [];
+  function verFim() {
+    if (itens.length && itens.every(function (i) { return i.feito; })) $('fim').style.display = 'block';
+  }
+  function render() {
+    $('itens').innerHTML = itens.map(function (it, i) {
+      var cls = it.feito ? (it.resp === 'NAO' ? 'no' : 'ok') : '';
+      var ico = it.tipo === 'EMAIL' ? '📧 Seu e-mail' : '📱 Seu telefone';
+      var corpo = it.feito
+        ? '<div class="res">' + (it.resp === 'NAO' ? '✖ Obrigado! Vamos corrigir.' : '✔ Confirmado') + '</div>'
+        : it.enviando ? '<div class="res">Enviando…</div>'
+        : '<div class="bt"><button class="sim" data-i="' + i + '" data-r="SIM">✔ Sim, é meu</button><button class="nao" data-i="' + i + '" data-r="NAO">✖ Não é meu</button></div>' +
+          (it.erro ? '<div class="res" style="color:#8a1c1c;font-size:14px">Não foi possível enviar. Verifique a internet e toque de novo.</div>' : '');
+      return '<div class="it ' + cls + '"><div class="rot">' + ico + '</div>' + (it.valor ? '<div class="val">' + esc(it.valor) + '</div>' : '<div style="height:10px"></div>') + corpo + '</div>';
+    }).join('');
+    verFim();
+  }
+  $('itens').onclick = function (e) {
+    var b = e.target.closest('button'); if (!b) return;
+    var it = itens[+b.dataset.i], r = b.dataset.r;
+    it.enviando = true; it.erro = false; render();
+    api({ acao: 'responder', token: it.token, resp: r })
+      .then(function () { it.feito = true; it.resp = r; })
+      .catch(function () { it.erro = true; })
+      .then(function () { it.enviando = false; render(); });
+  };
+  if (!t) { $('sub').textContent = 'Link inválido ou incompleto.'; $('itens').innerHTML = ''; return; }
+  api({ acao: 'info', tokens: t.split('-') }).then(function (j) {
+    $('sub').innerHTML = 'Estamos atualizando o cadastro' + (j.cliente ? ' de <b>' + esc(j.cliente) + '</b>' : '') + '.<br>' +
+      (j.itens.length > 1 ? 'Estes contatos são seus?' : 'Este contato é seu?');
+    itens = j.itens.map(function (x) {
+      var ja = x.status === 'CONFIRMADO' || x.status === 'RECUSADO';
+      return { token: x.token, tipo: x.tipo, valor: x.valor, feito: ja, resp: x.status === 'RECUSADO' ? 'NAO' : 'SIM' };
+    });
+    render();
+  }).catch(function () {
+    // mesmo sem conseguir buscar os detalhes, deixa o cliente responder
+    $('sub').textContent = 'Confirme se os contatos abaixo são seus:';
+    itens = t.split('-').filter(Boolean).slice(0, 6).map(function (tk) { return { token: tk, tipo: tk.charAt(0) === 'e' ? 'EMAIL' : 'TELEFONE', valor: '' }; });
+    render();
+  });
+})();
+</script>
+</body>
+</html>
