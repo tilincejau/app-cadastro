@@ -217,6 +217,17 @@ table.tb.fix{table-layout:fixed;width:100%}
   .cli .dir{max-width:42%}
   .cli>div:first-child{flex:1;min-width:0}
 }
+
+.envio{border:2px solid #1f9d55;background:#f5fbf7}
+.envio h3{color:#1f7a45}
+.env-st{margin:4px 0 2px;font-size:11.5px;min-height:18px}
+.env-opts{font-size:11.5px;color:var(--mut);margin:2px 0}
+.env-opts .chip{border:0;cursor:pointer;margin:2px 2px 0 0}
+.it-l{display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
+.val.tel{white-space:nowrap}
+.it-l .acoes{flex:none}
+.it-l .val{min-width:0}
+.menu .ver{font-size:11px;color:var(--mut);padding:8px 16px;text-align:center}
 </style>
 </head>
 <body>
@@ -227,7 +238,17 @@ table.tb.fix{table-layout:fixed;width:100%}
 <script src="app.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (r) { r.update(); }).catch(function () {});
+  });
+  // quando uma versão nova é instalada, recarrega uma vez (sem perder nada: a fila fica no aparelho)
+  var recarregou = false, tinhaVersao = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (recarregou || !tinhaVersao) return;          // primeira instalação: não recarrega
+    var digitando = document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+    if (digitando || document.querySelector('.modal-fundo')) return; // não atrapalha quem está digitando
+    recarregou = true; location.reload();
+  });
 }
 </script>
 </body>

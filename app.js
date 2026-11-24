@@ -4,6 +4,7 @@
    e enviada à planilha quando houver internet. Nada se perde.
    ================================================================ */
 'use strict';
+const APP_VERSAO = '9';
 
 const C = window.CONFIG;
 const DIAS = { 1: 'Segunda', 2: 'Terça', 3: 'Quarta', 4: 'Quinta', 5: 'Sexta' };
@@ -259,6 +260,7 @@ function render() {
       <button data-m="base">⬇ Atualizar clientes da planilha</button>
       <button data-m="backup">💾 Salvar cópia dos pendentes</button>
       <button data-m="sair">⎋ Sair</button>
+      <div class="ver">Versão ${APP_VERSAO}</div>
     </div>
   </header>
   <main id="main"></main>`;
@@ -383,6 +385,7 @@ function renderDetalhe() {
   const cli = clienteAtual();
   if (!cli) { S.view = 'lista'; return render(); }
   const contatoSalvo = LS.get('contato_' + cli.c, null);
+  S.envOrig = { cel: null, em: null };
   $('#main').innerHTML = `
   <div class="det-top"><h2>${esc(cli.s || cli.r)}</h2></div>
   <div class="box">
@@ -394,27 +397,34 @@ function renderDetalhe() {
     <label class="lb">Contato (nome do responsável)</label>
     <input class="in" id="contato" value="${esc(contatoSalvo != null ? contatoSalvo : cli.ct)}">
   </div>
-  <div class="box"><h3>Telefones</h3><div id="itensT"></div>
-    <div class="add"><input class="in" id="novoT" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000"><button class="btn ouro" id="addT">+ Adicionar</button></div>
+  <div class="box envio">
+    <h3>Confirmação pelo WhatsApp</h3>
+    <label class="lb">📱 Celular (WhatsApp)</label>
+    <input class="in" id="envCel" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000">
+    <div class="env-st" id="envCelSt"></div>
+    <div class="env-opts" id="envCelOpts"></div>
+    <label class="lb">📧 E-mail</label>
+    <input class="in" id="envEm" type="email" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="nome@exemplo.com.br">
+    <div class="env-st" id="envEmSt"></div>
+    <button class="btn zap full" id="envBtn">📲 Enviar confirmação pelo WhatsApp</button>
+    <div class="dica" style="text-align:center">Vai uma mensagem só, com o telefone e o e-mail. Se você alterar algum, o antigo fica marcado como inválido.</div>
   </div>
-  <div class="box"><h3>E-mail</h3><div id="itensE"></div>
-    <div class="add"><input class="in" id="novoE" type="email" inputmode="email" autocapitalize="none" placeholder="Adicionar e-mail"><button class="btn ouro" id="addE">+ Adicionar</button></div>
-  </div>`;
+  <div class="box"><h3>Telefones do cadastro</h3><div id="itensT"></div>
+    <div class="add"><input class="in" id="novoT" type="tel" inputmode="numeric" maxlength="14" placeholder="Outro telefone 000-00000-0000"><button class="btn ouro" id="addT">+ Adicionar</button></div>
+  </div>
+  <div class="box"><h3>E-mails do cadastro</h3><div id="itensE"></div></div>`;
   $('#contato').onchange = e => LS.set('contato_' + cli.c, e.target.value.trim());
-  aplicarMascara($('#novoT'));
+  aplicarMascara($('#novoT')); aplicarMascara($('#envCel'));
+  ['envCel', 'envEm'].forEach(id => $('#' + id).addEventListener('input', e => { e.target.dataset.sujo = '1'; }));
+  $('#envBtn').onclick = () => enviarConfirmacao(cli);
   $('#addT').onclick = () => {
     const v = validarFone($('#novoT').value);
     if (!v.ok) return toast(v.erro, 4500);
     if (jaExiste(cli, 'T' + v.chave)) return toast('Esse telefone já está no cadastro.');
-    gravar([registrarNovo(cli, 'FONE', v.padrao, 'NOVO')]); adicionarExtra(cli, 'FONE', v.padrao, 'NOVO'); $('#novoT').value = '';
+    gravar([registrarNovo(cli, 'FONE', v.padrao, 'NOVO')]); adicionarExtra(cli, 'FONE', v.padrao, 'NOVO', true); $('#novoT').value = '';
+    toast('Telefone adicionado.');
   };
-  $('#addE').onclick = () => {
-    const v = normEmail($('#novoE').value);
-    if (!emailValido(v)) return toast('E-mail inválido.');
-    if (jaExiste(cli, 'E' + v)) return toast('Esse e-mail já está no cadastro.');
-    gravar([registrarNovo(cli, 'EMAIL', v, 'NOVO')]); adicionarExtra(cli, 'EMAIL', v, 'NOVO'); $('#novoE').value = '';
-  };
-  renderItens();
+  renderItens(true);
 }
 
 function adicionarExtra(cli, tp, valor, origem, silencioso) {
@@ -509,47 +519,53 @@ function pedirSubstituto(cli, it, restantes, registrarInvalido) {
   inp.onkeydown = e => { if (e.key === 'Enter') salvar(); };
 }
 
-function renderItens() {
+const PRIORIDADE = { 'NOVO - NAO ENVIADO': 0, '': 1, PENDENTE: 2, RECUSADO: 3, CONFIRMADO: 4, 'FIXO CONFERIDO': 5 };
+function melhor(lista) {
+  return lista.slice().sort((a, b) => (PRIORIDADE[a.st] ?? 9) - (PRIORIDADE[b.st] ?? 9))[0] || null;
+}
+
+function renderItens(forcar) {
   const cli = clienteAtual(); if (!cli || !$('#itensT')) return;
   const itens = itensDoCliente(cli);
   const vis = itens.filter(i => i.st !== ST.INVALIDO);   // inválidos saem da lista
   const tel = vis.filter(i => i.tp !== 'EMAIL'), em = vis.filter(i => i.tp === 'EMAIL');
-  const cels = tel.filter(i => i.tp === 'CELULAR' && i.st !== ST.INVALIDO && i.st !== ST.RECUSADO);
-  const emPend = em.filter(i => i.st !== ST.CONFIRMADO && i.st !== ST.INVALIDO);
-  const ctx = { cels, emPend };
-  $('#itensT').innerHTML = tel.length ? tel.map(i => cardItem(i, ctx)).join('') : '<div class="vazio">Nenhum telefone na base.</div>';
-  $('#itensE').innerHTML = em.length ? em.map(i => cardItem(i, ctx)).join('') : '<div class="vazio">Nenhum e-mail na base.</div>';
+  const cels = tel.filter(i => i.tp === 'CELULAR' && i.st !== ST.RECUSADO);
+  const emOk = em.filter(i => i.st !== ST.RECUSADO);
+
+  // quadro de envio (só preenche o que o vendedor não estiver editando)
+  const cel = melhor(cels), eml = melhor(emOk);
+  const iCel = $('#envCel'), iEm = $('#envEm');
+  if (forcar || iCel.dataset.sujo !== '1') { iCel.value = cel ? cel.valor : ''; iCel.dataset.sujo = ''; S.envOrig.cel = cel; }
+  if (forcar || iEm.dataset.sujo !== '1') { iEm.value = eml ? eml.valor : ''; iEm.dataset.sujo = ''; S.envOrig.em = eml; }
+  const stTxt = it => it ? (it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>') + (it.ult && it.ult.rs ? ' <small>em ' + dataBR(it.ult.rs) + '</small>' : '') : '';
+  $('#envCelSt').innerHTML = cel ? stTxt(cel) : (tel.length ? '<span class="chip verm">Sem celular – digite um</span>' : '<span class="chip verm">Sem telefone – digite um celular</span>');
+  $('#envEmSt').innerHTML = eml ? stTxt(eml) : '<span class="chip cinza">Sem e-mail – digite se tiver</span>';
+  $('#envCelOpts').innerHTML = cels.length > 1 ? 'Outros celulares: ' + cels.filter(c => c !== cel).map(c => `<button class="chip azul" data-usar="${esc(c.valor)}">${esc(c.valor)}</button>`).join(' ') : '';
+  $('#envCelOpts').onclick = e => { const b = e.target.closest('[data-usar]'); if (!b) return; iCel.value = b.dataset.usar; iCel.dataset.sujo = '1'; };
+  const tudoOk = (!cel || cel.st === ST.CONFIRMADO) && (!eml || eml.st === ST.CONFIRMADO) && (cel || eml);
+  $('#envBtn').innerHTML = tudoOk ? '↻ Reenviar confirmação pelo WhatsApp' : '📲 Enviar confirmação pelo WhatsApp';
+
+  $('#itensT').innerHTML = tel.length ? tel.map(cardItem).join('') : '<div class="vazio">Nenhum telefone.</div>';
+  $('#itensE').innerHTML = em.length ? em.map(cardItem).join('') : '<div class="vazio">Nenhum e-mail.</div>';
   const handler = e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
     const it = itens.find(i => i.k === b.dataset.k); if (!it) return;
-    executar(cli, it, b.dataset.acao, itens, b.closest('.item'));
+    executar(cli, it, b.dataset.acao, itens);
   };
   $('#itensT').onclick = handler; $('#itensE').onclick = handler;
 }
 
-function cardItem(it, ctx) {
+function cardItem(it) {
   const tipoChip = it.tp === 'CELULAR' ? '<span class="chip azul">Celular</span>' : it.tp === 'FIXO' ? '<span class="chip cinza">Fixo</span>' : it.tp === 'EMAIL' ? '<span class="chip azul">E-mail</span>' : '<span class="chip verm">Revisar número</span>';
-  const jaFoi = it.regs.some(r => r.cn && r.cn !== 'NENHUM');
-  let acoes = '';
   const k = esc(it.k);
-  if (it.tp === 'CELULAR') {
-    acoes = `<button class="btn zap peq" data-acao="WHATS" data-k="${k}">${jaFoi ? '↻ Reenviar' : '📲 Enviar'} WhatsApp</button>
-             <button class="btn sec peq" data-acao="SMS" data-k="${k}">✉ SMS</button>`;
-    if (ctx.emPend.length) acoes = `<label class="inc"><input type="checkbox" class="incE" checked><span>Confirmar também o e-mail <b>${esc(ctx.emPend.map(e => e.valor).join(', '))}</b> na mesma mensagem</span></label>` + acoes;
-  } else if (it.tp === 'FIXO') {
-    acoes = `<button class="btn peq" data-acao="CONFERIDO" data-k="${k}">✔ Conferido</button>`;
-  } else if (it.tp === 'EMAIL') {
-    if (!ctx.cels.length) acoes = `<div class="aviso" style="margin:0 0 6px">O e-mail é confirmado pelo WhatsApp do cliente. Adicione um celular em Telefones para enviar.</div>`;
-    else acoes = (ctx.cels.length > 1 ? `<select class="in selCel" style="margin-bottom:6px">${ctx.cels.map(c => `<option value="${esc(c.k)}">Enviar para ${esc(c.valor)}</option>`).join('')}</select>` : '') +
-      `<button class="btn zap peq" data-acao="EMAIL" data-k="${k}">${jaFoi ? '↻ Reenviar' : '📲 Enviar'} pelo WhatsApp${ctx.cels.length === 1 ? ' ' + esc(ctx.cels[0].valor) : ''}</button>`;
-  }
-  if (it.st !== ST.INVALIDO) acoes += `<button class="btn perigo peq" data-acao="INVALIDO" data-k="${k}">✖ Inválido</button>`;
-  const hist = it.regs.slice(0, 5).map(r =>
-    `<div>${dataBR(r.dt)} · ${esc(r.u)} · ${esc(r.cn || '')}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''} · ${esc((ST_INFO[r.st] || [r.st])[0])}${r.rs ? ' em ' + dataBR(r.rs) : ''}${r.local ? ' <span class="nsinc">⏳ não sincronizado</span>' : ''}</div>`).join('');
+  let acoes = '';
+  if (it.tp === 'FIXO' && it.st !== ST.FIXO) acoes = `<button class="btn peq" data-acao="CONFERIDO" data-k="${k}">✔ Conferido</button>`;
+  acoes += `<button class="btn perigo peq" data-acao="INVALIDO" data-k="${k}">✖ Inválido</button>`;
+  const hist = it.regs.slice(0, 4).map(r =>
+    `<div>${dataBR(r.dt)} · ${esc(r.u)} · ${esc(r.cn === 'NENHUM' ? 'sem envio' : r.cn || '')} · ${esc((ST_INFO[r.st] || [r.st])[0])}${r.rs ? ' em ' + dataBR(r.rs) : ''}${r.local ? ' <span class="nsinc">⏳</span>' : ''}</div>`).join('');
   return `<div class="item">
-    <div class="val">${esc(it.valor)}</div>
-    <div class="meta">${tipoChip}${it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>'}<span>Origem: ${esc(it.origem)}</span></div>
-    <div class="acoes">${acoes}</div>
+    <div class="it-l"><div class="val${it.tp === 'EMAIL' ? '' : ' tel'}">${esc(it.valor)}</div><div class="acoes">${acoes}</div></div>
+    <div class="meta">${tipoChip}${it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>'}<span>${esc(it.origem)}</span></div>
     ${hist ? `<div class="hist">${hist}</div>` : ''}
   </div>`;
 }
@@ -587,7 +603,7 @@ function urlConfirmacao(tokens) {
   return base + '?t=' + tokens.join('-');
 }
 
-function executar(cli, it, acao, itens, card) {
+function executar(cli, it, acao, itens) {
   const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
   const novo = (item, extra) => novoReg(cli, item, extra);
 
@@ -598,31 +614,48 @@ function executar(cli, it, acao, itens, card) {
     return pedirSubstituto(cli, it, restantes, regNovo => gravar([novo(it, { acao: 'INVALIDO' })].concat(regNovo ? [regNovo] : [])));
   }
 
-  // Envio pelo WhatsApp / SMS
-  let cel, alvos;
-  if (acao === 'EMAIL') {
-    const sel = card && card.querySelector('.selCel');
-    cel = sel ? itens.find(i => i.k === sel.value) : itens.find(i => i.tp === 'CELULAR' && i.st !== ST.INVALIDO && i.st !== ST.RECUSADO);
-    if (!cel) return toast('Adicione um celular para enviar a confirmação do e-mail.');
-    alvos = [it];
-  } else {
-    cel = it;
-    alvos = [it];
-    const inc = card && card.querySelector('.incE');
-    if (inc && inc.checked) itens.filter(i => i.tp === 'EMAIL' && i.st !== ST.CONFIRMADO && i.st !== ST.INVALIDO).forEach(e => alvos.push(e));
-  }
-  const canal = acao === 'SMS' ? 'SMS' : 'WHATSAPP';
-  const regs = alvos.map(a => novo(a, { token: (a.tp === 'EMAIL' ? 'e' : 'f') + uid(11), cn: canal, pa: cel.valor }));
-  const link = urlConfirmacao(regs.map(r => r.token));
-  const msg = encodeURIComponent(mensagemConfirmacao(cli, contato, link, regs));
-  const url = canal === 'SMS' ? 'sms:+' + cel.n.intl + '?&body=' + msg : 'https://wa.me/' + cel.n.intl + '?text=' + msg;
-  gravar(regs);
-  abrirLink(url);
 }
 
-function gravar(regs) {
+/** Um botão só: envia telefone + e-mail na mesma mensagem, com o que estiver digitado no quadro. */
+function enviarConfirmacao(cli) {
+  const itens = itensDoCliente(cli);
+  const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
+  if (!$('#envCel').value.replace(/\D/g, '')) return toast('Digite o celular do cliente para enviar pelo WhatsApp.', 4000);
+  const v = validarFone($('#envCel').value);
+  if (!v.ok) return toast(v.erro, 4500);
+  if (v.tipo !== 'CELULAR') return toast('Para o WhatsApp precisa ser um celular (9 depois do DDD).', 4000);
+  const emTxt = $('#envEm').value.trim();
+  const em = normEmail(emTxt);
+  if (emTxt && !emailValido(em)) return toast('E-mail inválido. Corrija ou deixe em branco.', 4000);
+
+  const regs = [];
+  // decide qual item usar; se o vendedor alterou o valor, o antigo vira inválido
+  const resolver = (k, valorNovo, tp, orig) => {
+    const existente = itens.find(i => i.k === k && i.st !== ST.INVALIDO);
+    if (existente) return existente;
+    let origem = 'NOVO';
+    if (orig && orig.k !== k && orig.st !== ST.INVALIDO) {
+      regs.push(novoReg(cli, orig, { acao: 'INVALIDO' }));
+      origem = 'Substitui ' + orig.valor;
+    }
+    return { k, tp, valor: valorNovo, origem, vb: '', st: '' };
+  };
+  const cel = resolver('T' + v.chave, v.padrao, 'CELULAR', S.envOrig.cel);
+  const eml = em ? resolver('E' + em, em, 'EMAIL', S.envOrig.em) : null;
+
+  const alvos = [cel];
+  if (eml && (eml.st !== ST.CONFIRMADO || cel.st === ST.CONFIRMADO)) alvos.push(eml);
+  const envios = alvos.map(a => novoReg(cli, a, { token: (a.tp === 'EMAIL' ? 'e' : 'f') + uid(11), cn: 'WHATSAPP', pa: v.padrao }));
+  const link = urlConfirmacao(envios.map(r => r.token));
+  const msg = encodeURIComponent(mensagemConfirmacao(cli, contato, link, envios));
+  gravar(regs.concat(envios), true);
+  renderItens(true);
+  abrirLink('https://wa.me/' + v.intl + '?text=' + msg);
+}
+
+function gravar(regs, forcar) {
   const f = fila.ler(); regs.forEach(r => f.push(r)); fila.gravar(f);   // 1º grava no aparelho (nunca se perde)
-  reindexar(); renderItens(); barra();
+  reindexar(); renderItens(forcar); barra();
   setTimeout(() => sincronizar(), 300);
 }
 
