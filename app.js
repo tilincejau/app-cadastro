@@ -4,7 +4,7 @@
    e enviada à planilha quando houver internet. Nada se perde.
    ================================================================ */
 'use strict';
-const APP_VERSAO = '13';
+const APP_VERSAO = '14';
 
 const C = window.CONFIG;
 const DIAS = { 1: 'Segunda', 2: 'Terça', 3: 'Quarta', 4: 'Quinta', 5: 'Sexta' };
@@ -48,7 +48,7 @@ const S = {
   clientes: [], registros: [], dadosEm: 0,
   porCli: new Map(), extras: {},
   view: 'lista', aba: 'clientes', cli: null,
-  f: { dia: '', rota: '', sit: '', vend: '', mesa: '', q: '' },
+  f: { dia: '', rota: '', sit: '', vend: '', mesa: '', q: '', pb: '' },
   pf: { u: '', st: '' },
   limite: 120, syncing: false, erro: '', ultimaSync: LS.get('ultimaSync', 0)
 };
@@ -303,10 +303,36 @@ function barra() {
 /* ================================================================
    LISTA DE CLIENTES
    ================================================================ */
+/* ---------- problemas a ajustar ---------- */
+const PB = {
+  TEL_ERRADO: ['Telefone errado', 'Número fora do padrão ou inválido'],
+  TEL_REPETIDO: ['Telefone em outro PDV', 'Mesmo telefone cadastrado em outro cliente'],
+  EMAIL_REPETIDO: ['E-mail repetido', 'Mesmo e-mail cadastrado em outro cliente'],
+  EMAIL_ERRADO: ['E-mail errado', 'E-mail em formato inválido']
+};
+/** Problemas ainda abertos: o que o vendedor já conferiu (✔) ou removeu não conta mais. */
+function problemasDoCliente(cli, itens) {
+  const tipos = new Set(), porItem = {};
+  const add = (it, tipo, msg) => { tipos.add(tipo); (porItem[it.k] = porItem[it.k] || []).push(msg); };
+  itens.forEach(it => {
+    if (it.st === ST.INVALIDO || OK_VENDEDOR.has(it.st)) return;
+    const dp = cli.dp && cli.dp[it.k];
+    const outros = dp ? 'Também em: ' + dp.o.join(', ') + (dp.n - 1 > dp.o.length ? ` (+${dp.n - 1 - dp.o.length})` : '') : '';
+    if (it.tp === 'EMAIL') {
+      if (!emailValido(it.valor)) add(it, 'EMAIL_ERRADO', 'E-mail em formato inválido');
+      if (dp) add(it, 'EMAIL_REPETIDO', `E-mail usado em ${dp.n} PDVs. ${outros}`);
+    } else {
+      if (it.tp === 'REVISAR' || (it.n && /^(\d)\1+$/.test(it.n.num))) add(it, 'TEL_ERRADO', 'Número fora do padrão');
+      if (dp) add(it, 'TEL_REPETIDO', `Telefone usado em ${dp.n} PDVs. ${outros}`);
+    }
+  });
+  return { tipos, porItem };
+}
+
 function clientesCalculados() {
   return S.clientes.map(c => {
     const itens = itensDoCliente(c);
-    return { c, itens, sit: situacao(itens), dia: diaDaPasta(c.p) };
+    return { c, itens, sit: situacao(itens), dia: diaDaPasta(c.p), pb: problemasDoCliente(c, itens).tipos };
   });
 }
 
@@ -326,9 +352,12 @@ function renderLista() {
   const baseRota = baseDia.filter(x => !f.rota || x.c.p === f.rota);
   const q = f.q.trim().toLowerCase();
   const baseBusca = q ? baseRota.filter(x => (x.c.s + ' ' + x.c.r + ' ' + x.c.c + ' ' + x.c.doc + ' ' + x.c.ct).toLowerCase().includes(q)) : baseRota;
+  const contPb = { ALGUM: 0 }; Object.keys(PB).forEach(k => contPb[k] = 0);
+  baseBusca.forEach(x => { if (x.pb.size) contPb.ALGUM++; x.pb.forEach(k => contPb[k]++); });
+  const basePb = baseBusca.filter(x => !f.pb || (f.pb === 'ALGUM' ? x.pb.size > 0 : x.pb.has(f.pb)));
   const cont = { NI: 0, EA: 0, AG: 0, OK: 0 };
-  baseBusca.forEach(x => cont[x.sit]++);
-  const lista = baseBusca.filter(x => !f.sit || x.sit === f.sit);
+  basePb.forEach(x => cont[x.sit]++);
+  const lista = basePb.filter(x => !f.sit || x.sit === f.sit);
 
   $('#main').innerHTML = `
   <div class="filtros">
@@ -339,10 +368,15 @@ function renderLista() {
     ${ger ? `<select class="in" id="fmesa" style="grid-column:1/-1"><option value="">Todas as mesas</option>${mesas.map(m => `<option value="${esc(m)}" ${f.mesa === m ? 'selected' : ''}>Mesa ${esc(m)}</option>`).join('')}</select>` : ''}
     ${sup ? `<select class="in" id="fvend"><option value="">Todos vendedores</option>${vendedores.map(v => `<option ${f.vend === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>` : ''}
     <select class="in" id="frota" ${sup ? '' : 'style="grid-column:1/-1"'}><option value="">Todas as rotas</option>${rotas.map(r => `<option value="${esc(r)}" ${f.rota === r ? 'selected' : ''}>Rota ${esc(r)}${diaDaPasta(r) ? ' – ' + DIAS[diaDaPasta(r)] : ''}</option>`).join('')}</select>
+    <select class="in busca ${f.pb ? 'pbon' : ''}" id="fpb">
+      <option value="">❗ Ajustes: todos os clientes</option>
+      <option value="ALGUM" ${f.pb === 'ALGUM' ? 'selected' : ''}>❗ Com algum problema (${contPb.ALGUM})</option>
+      ${Object.keys(PB).filter(k => contPb[k] || f.pb === k).map(k => `<option value="${k}" ${f.pb === k ? 'selected' : ''}>❗ ${PB[k][0]} (${contPb[k]})</option>`).join('')}
+    </select>
     <input class="in busca" id="fq" placeholder="🔍 Buscar nome, código, CNPJ, contato" value="${esc(f.q)}">
   </div>
   <div class="resumo">
-    <span class="chip ${!f.sit ? 'verde' : 'cinza'}" data-sit="">Todos ${baseBusca.length}</span>
+    <span class="chip ${!f.sit ? 'verde' : 'cinza'}" data-sit="">Todos ${basePb.length}</span>
     ${Object.keys(SIT).filter(k => k !== 'AG' || cont.AG).map(k => `<span class="chip ${f.sit === k ? SIT[k][1] : 'cinza'}" data-sit="${k}" style="${f.sit === k ? 'outline:2px solid currentColor' : ''}">${SIT[k][0]} ${cont[k]}</span>`).join('')}
   </div>
   <div id="lista">
@@ -352,6 +386,7 @@ function renderLista() {
 
   document.querySelectorAll('[data-dia]').forEach(b => b.onclick = () => { f.dia = b.dataset.dia; S.limite = 120; renderLista(); });
   document.querySelectorAll('[data-sit]').forEach(b => b.onclick = () => { f.sit = b.dataset.sit; S.limite = 120; renderLista(); });
+  $('#fpb').onchange = e => { f.pb = e.target.value; S.limite = 120; renderLista(); };
   if ($('#fmesa')) $('#fmesa').onchange = e => { f.mesa = e.target.value; S.limite = 120; renderLista(); };
   if ($('#fvend')) $('#fvend').onchange = e => { f.vend = e.target.value; renderLista(); };
   $('#frota').onchange = e => { f.rota = e.target.value; renderLista(); };
@@ -370,9 +405,10 @@ function cardCliente(x) {
   const nT = x.itens.filter(i => i.tp !== 'EMAIL').length, nE = x.itens.filter(i => i.tp === 'EMAIL').length;
   const nOk = x.itens.filter(i => RESOLVIDO.has(i.st)).length;
   const temLocal = (S.porCli.get(c.c) || []).some(r => r.local);
-  return `<div class="cli ${x.sit}" data-cli="${esc(c.c)}">
+  return `<div class="cli ${x.sit}${x.pb.size ? ' temPb' : ''}" data-cli="${esc(c.c)}">
     <div style="min-width:0">
-      <div class="nm">${esc(c.s || c.r)}</div>
+      <div class="nm">${x.pb.size ? '<span class="exc" title="Contatos para ajustar">!</span>' : ''}${esc(c.s || c.r)}</div>
+      ${x.pb.size ? `<div class="pbs">${[...x.pb].map(k => `<span>${PB[k][0]}</span>`).join('')}</div>` : ''}
       <div class="sub">${esc(c.c)} · ${esc(c.r)}</div>
       <div class="sub">Rota ${esc(c.p)}${x.dia ? ' (' + DIAS_C[x.dia] + ')' : ''}${ehSupervisor() ? ' · Vend ' + esc(c.v1) + (c.v5 ? '/' + esc(c.v5) : '') : ''}${ehGerente() ? ' · Mesa ' + esc(c.m) : ''}</div>
     </div>
@@ -405,6 +441,7 @@ function renderDetalhe() {
   </div>
   <div class="box envio">
     <h3>Conferência dos contatos</h3>
+    <div id="pbTopo"></div>
     <div class="dica" style="margin:0 0 6px">Confira com o cliente: <b>✔</b> se está correto, <b>✎</b> para corrigir ou remover.</div>
     <div class="lb">📱 Telefones</div>
     <div id="listaT"></div>
@@ -440,6 +477,8 @@ function renderDetalhe() {
     if (itens.some(i => i.tp === 'REVISAR')) return toast('Há número fora do padrão. Corrija com ✎ antes de concluir.', 4000);
     const faltam = itens.filter(i => !OK_VENDEDOR.has(i.st));
     if (!faltam.length) return toast('Todos os contatos já estão conferidos ✔');
+    const pb = problemasDoCliente(cli, itens);
+    if (pb.tipos.size && !confirm('Atenção: este cliente tem ' + [...pb.tipos].map(k => PB[k][0].toLowerCase()).join(', ') + '.\n\nVocê conferiu com o cliente e está correto mesmo assim?')) return;
     gravar(faltam.map(i => novoReg(cli, i, { acao: 'CONFERIDO' })));
     toast('Conferência concluída ✔');
   };
@@ -539,6 +578,8 @@ function renderItens() {
   const itens = itensDoCliente(cli);
   const vis = itens.filter(i => i.st !== ST.INVALIDO);   // inválidos saem da tela
   const tel = vis.filter(i => i.tp !== 'EMAIL'), em = vis.filter(i => i.tp === 'EMAIL');
+  const pb = problemasDoCliente(cli, itens); S.pbItem = pb.porItem;
+  $('#pbTopo').innerHTML = pb.tipos.size ? `<div class="pbtopo"><b>❗ Este cliente tem contatos para ajustar:</b> ${[...pb.tipos].map(k => PB[k][0]).join(' · ')}.<br><small>Corrija com ✎ ou, se estiver certo mesmo assim, toque em ✔ Correto.</small></div>` : '';
   $('#listaT').innerHTML = tel.length ? tel.map((it, n) => linhaContato(it, n + 1)).join('') : '<div class="vazio-p">Nenhum telefone. Adicione um abaixo.</div>';
   $('#listaE').innerHTML = em.length ? em.map((it, n) => linhaContato(it, n + 1)).join('') : '<div class="vazio-p">Nenhum e-mail. Adicione se o cliente tiver.</div>';
   const handler = e => {
@@ -562,7 +603,9 @@ function linhaContato(it, n) {
   if (!ok && it.tp !== 'REVISAR') b += `<button class="btn peq bok" data-acao="OK" data-k="${k}">✔ Correto</button>`;
   b += `<button class="btn sec peq" data-acao="EDIT" data-k="${k}">✎${ok ? '' : ' Corrigir'}</button>`;
   const quando = it.ult && OK_VENDEDOR.has(it.ult.st) ? ' <small>' + dataBR(it.ult.dt) + ' · ' + esc(it.ult.u) + '</small>' : '';
-  return `<div class="outro${ok ? ' ok' : ''}">
+  const avisos = (S.pbItem && S.pbItem[it.k]) || [];
+  return `<div class="outro${ok ? ' ok' : ''}${avisos.length ? ' pb' : ''}">
+    ${avisos.map(a => `<div class="warn">❗ ${esc(a)}</div>`).join('')}
     <div class="o1"><span class="val${it.tp === 'EMAIL' ? '' : ' tel'}">${esc(it.valor)}</span><span class="ob">${b}</span></div>
     <div class="o2">${it.tp !== 'EMAIL' ? `<span class="chip ouro">${n}ª opção</span>` : ''}<span class="chip ${it.tp === 'REVISAR' ? 'verm' : 'cinza'}">${tipo}</span>${ok ? chip(it.st) : (it.st && it.st !== 'NOVO - NAO ENVIADO' ? chip(it.st) : '<span class="chip cinza">A conferir</span>')}${quando}<small class="org">${esc(it.origem)}</small></div>
   </div>`;
@@ -628,8 +671,8 @@ function renderPainel() {
   const porM = {};
   if (ger) calcTodos.forEach(x => {
     const m = x.c.m || '—';
-    const o = porM[m] = porM[m] || { tot: 0, ini: 0, ok: 0, ag: 0 };
-    o.tot++; if (x.sit !== 'NI') o.ini++; if (x.sit === 'OK') o.ok++; if (x.sit === 'AG') o.ag++;
+    const o = porM[m] = porM[m] || { tot: 0, ini: 0, ok: 0, ag: 0, pb: 0 };
+    o.tot++; if (x.pb.size) o.pb++; if (x.sit !== 'NI') o.ini++; if (x.sit === 'OK') o.ok++; if (x.sit === 'AG') o.ag++;
   });
   const codsMesa = new Set(calc.map(x => x.c.c));
   const cont = { NI: 0, EA: 0, AG: 0, OK: 0 };
@@ -652,16 +695,16 @@ function renderPainel() {
   const porV = {};
   if (sup) calc.forEach(x => {
     const v = x.c.v1 || '—';
-    const o = porV[v] = porV[v] || { tot: 0, ini: 0, ok: 0, ag: 0 };
-    o.tot++; if (x.sit !== 'NI') o.ini++; if (x.sit === 'OK') o.ok++; if (x.sit === 'AG') o.ag++;
+    const o = porV[v] = porV[v] || { tot: 0, ini: 0, ok: 0, ag: 0, pb: 0 };
+    o.tot++; if (x.pb.size) o.pb++; if (x.sit !== 'NI') o.ini++; if (x.sit === 'OK') o.ok++; if (x.sit === 'AG') o.ag++;
   });
 
   const usuarios = Object.keys(porU).sort();
   const filtrados = regs.filter(r => (!S.pf.u || r.u === S.pf.u) && (!S.pf.st || r.st === S.pf.st)).slice(0, 300);
 
   const tabela = (titulo, rot, mapa) => `<div class="box"><h3>${titulo}</h3><table class="tb fix">
-    <tr><th>${rot}</th><th>Cli.</th><th>Inic.</th><th>Aguard.</th><th>OK</th><th style="width:28%">Progresso</th></tr>
-    ${Object.keys(mapa).sort((a, b) => a - b).map(v => { const o = mapa[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td>${o.ag}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div><small>${p}%</small></td></tr>`; }).join('')}
+    <tr><th>${rot}</th><th>Cli.</th><th>Inic.</th><th style="color:#ffb3b3">❗</th><th>OK</th><th style="width:28%">Progresso</th></tr>
+    ${Object.keys(mapa).sort((a, b) => a - b).map(v => { const o = mapa[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td style="color:var(--vermelho);font-weight:700">${o.pb}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div><small>${p}%</small></td></tr>`; }).join('')}
   </table></div>`;
   const resumoU = o => `<div class="mini">
       <div class="v"><b>${o.conf}</b><span>Conferidos</span></div><div class="o"><b>${o.corr}</b><span>Corrigidos</span></div>
@@ -674,6 +717,7 @@ function renderPainel() {
     <div class="kpi o"><div class="n">${calc.length - cont.NI}</div><div class="t">Iniciados</div></div>
     <div class="kpi o"><div class="n">${cont.EA + cont.AG}</div><div class="t">Em andamento</div></div>
     <div class="kpi"><div class="n">${cont.OK}</div><div class="t">Concluídos</div></div>
+    <div class="kpi pbk" id="kpiPb" style="grid-column:1/-1"><div class="n">❗ ${calc.filter(x => x.pb.size).length}</div><div class="t">Clientes com contato para ajustar (telefone errado, telefone em outro PDV, e-mail repetido) – toque para ver</div></div>
   </div>
   ${ger && !S.f.mesa ? tabela('Progresso por mesa', 'Mesa', porM) : ''}
   ${sup ? tabela('Carteira por vendedor', 'Vend.', porV) : ''}
@@ -693,6 +737,7 @@ function renderPainel() {
       </div>`; }).join('') || '<div class="vazio">Sem registros.</div>'}
     </div>
   </div>`;
+  $('#kpiPb').onclick = () => { S.f.pb = 'ALGUM'; S.f.sit = ''; S.aba = 'clientes'; S.limite = 120; render(); };
   if ($('#pmesa')) $('#pmesa').onchange = e => { S.f.mesa = e.target.value; renderPainel(); };
   if ($('#pu')) $('#pu').onchange = e => { S.pf.u = e.target.value; renderPainel(); };
   $('#pst').onchange = e => { S.pf.st = e.target.value; renderPainel(); };
