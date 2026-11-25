@@ -4,7 +4,7 @@
    e enviada à planilha quando houver internet. Nada se perde.
    ================================================================ */
 'use strict';
-const APP_VERSAO = '12';
+const APP_VERSAO = '13';
 
 const C = window.CONFIG;
 const DIAS = { 1: 'Segunda', 2: 'Terça', 3: 'Quarta', 4: 'Quinta', 5: 'Sexta' };
@@ -12,7 +12,7 @@ const DIAS_C = { 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex' };
 const CAMPOS_FONE = ['Fone(1)', 'Fone(2)', 'Cel(1)', 'Cel(2)'];
 const ST = {
   PENDENTE: 'PENDENTE', CONFIRMADO: 'CONFIRMADO', RECUSADO: 'RECUSADO',
-  FIXO: 'FIXO CONFERIDO', INVALIDO: 'INVALIDO'
+  FIXO: 'FIXO CONFERIDO', INVALIDO: 'INVALIDO', CONFERIDO: 'CONFERIDO'
 };
 const ST_INFO = {
   PENDENTE: ['Aguardando confirmação', 'ouro'],
@@ -20,13 +20,14 @@ const ST_INFO = {
   RECUSADO: ['Dono recusou', 'verm'],
   'FIXO CONFERIDO': ['Fixo conferido', 'verde'],
   INVALIDO: ['Inválido', 'cinza'],
+  CONFERIDO: ['Conferido', 'verde'],
   'NOVO - NAO ENVIADO': ['Novo · enviar', 'azul']
 };
-const RESOLVIDO = new Set([ST.CONFIRMADO, ST.RECUSADO, ST.FIXO, ST.INVALIDO]);
+const RESOLVIDO = new Set([ST.CONFIRMADO, ST.RECUSADO, ST.FIXO, ST.INVALIDO, ST.CONFERIDO]);
 const AGUARDA = new Set([ST.PENDENTE]);
 const SIT = {
   NI: ['Não iniciado', 'cinza'], EA: ['Em andamento', 'azul'],
-  AG: ['Aguardando', 'ouro'], OK: ['Concluído', 'verde']
+  AG: ['Aguard. WhatsApp', 'ouro'], OK: ['Concluído', 'verde']
 };
 
 /* ---------- armazenamento local ---------- */
@@ -259,7 +260,7 @@ function render() {
     <div class="barra-sync" id="bsync"></div>
     ${S.view !== 'detalhe' ? `<nav class="abas">
       <button data-aba="clientes" class="${S.aba === 'clientes' ? 'on' : ''}">Clientes</button>
-      <button data-aba="painel" class="${S.aba === 'painel' ? 'on' : ''}">${sup ? 'Acompanhamento' : 'Meus envios'}</button>
+      <button data-aba="painel" class="${S.aba === 'painel' ? 'on' : ''}">${sup ? 'Acompanhamento' : 'Meu resumo'}</button>
     </nav>` : ''}
     <div class="menu hide" id="menu">
       <button data-m="sync">⟳ Sincronizar agora</button>
@@ -342,7 +343,7 @@ function renderLista() {
   </div>
   <div class="resumo">
     <span class="chip ${!f.sit ? 'verde' : 'cinza'}" data-sit="">Todos ${baseBusca.length}</span>
-    ${Object.keys(SIT).map(k => `<span class="chip ${f.sit === k ? SIT[k][1] : 'cinza'}" data-sit="${k}" style="${f.sit === k ? 'outline:2px solid currentColor' : ''}">${SIT[k][0]} ${cont[k]}</span>`).join('')}
+    ${Object.keys(SIT).filter(k => k !== 'AG' || cont.AG).map(k => `<span class="chip ${f.sit === k ? SIT[k][1] : 'cinza'}" data-sit="${k}" style="${f.sit === k ? 'outline:2px solid currentColor' : ''}">${SIT[k][0]} ${cont[k]}</span>`).join('')}
   </div>
   <div id="lista">
     ${lista.length ? lista.slice(0, S.limite).map(cardCliente).join('') : '<div class="vazio">Nenhum cliente encontrado com esses filtros.</div>'}
@@ -391,7 +392,6 @@ function renderDetalhe() {
   const cli = clienteAtual();
   if (!cli) { S.view = 'lista'; return render(); }
   const contatoSalvo = LS.get('contato_' + cli.c, null);
-  S.envOrig = { cel: null, em: null };
   $('#main').innerHTML = `
   <div class="det-top"><h2>${esc(cli.s || cli.r)}</h2></div>
   <div class="box">
@@ -404,38 +404,50 @@ function renderDetalhe() {
     <input class="in" id="contato" value="${esc(contatoSalvo != null ? contatoSalvo : cli.ct)}">
   </div>
   <div class="box envio">
-    <h3>Contatos do cliente</h3>
-    <label class="lb">📱 Celular (WhatsApp)</label>
-    <div class="cr"><input class="in" id="envCel" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000"><button class="btn perigo xq" id="invCel" title="Inválido">✖</button></div>
-    <div class="env-st" id="envCelSt"></div>
-    <label class="lb">📧 E-mail</label>
-    <div class="cr"><input class="in" id="envEm" type="email" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="nome@exemplo.com.br"><button class="btn perigo xq" id="invEm" title="Inválido">✖</button></div>
-    <div class="env-st" id="envEmSt"></div>
-    <div id="outros"></div>
-    <details class="addt"><summary>+ Adicionar outro telefone</summary>
+    <h3>Conferência dos contatos</h3>
+    <div class="dica" style="margin:0 0 6px">Confira com o cliente: <b>✔</b> se está correto, <b>✎</b> para corrigir ou remover.</div>
+    <div class="lb">📱 Telefones</div>
+    <div id="listaT"></div>
+    <details class="addt"><summary>+ Adicionar telefone</summary>
       <div class="add"><input class="in" id="novoT" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000"><button class="btn ouro" id="addT">Adicionar</button></div>
     </details>
-    <button class="btn zap full" id="envBtn">📲 Enviar confirmação pelo WhatsApp</button>
-    <div class="dica" style="text-align:center">Uma mensagem só, com celular e e-mail. Errado? Toque em ✖ ou corrija no campo: o antigo fica como inválido.</div>
+    <div class="lb" style="margin-top:12px">📧 E-mail</div>
+    <div id="listaE"></div>
+    <details class="addt"><summary>+ Adicionar e-mail</summary>
+      <div class="add"><input class="in" id="novoE" type="email" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="nome@exemplo.com.br"><button class="btn ouro" id="addE">Adicionar</button></div>
+    </details>
+    <button class="btn full" id="tudoOk">✔ Todos os contatos estão corretos</button>
   </div>`;
   $('#contato').onchange = e => LS.set('contato_' + cli.c, e.target.value.trim());
-  aplicarMascara($('#novoT')); aplicarMascara($('#envCel'));
-  ['envCel', 'envEm'].forEach(id => $('#' + id).addEventListener('input', e => { e.target.dataset.sujo = '1'; }));
-  $('#envBtn').onclick = () => enviarConfirmacao(cli);
+  aplicarMascara($('#novoT'));
   $('#addT').onclick = () => {
     const v = validarFone($('#novoT').value);
     if (!v.ok) return toast(v.erro, 4500);
     if (jaExiste(cli, 'T' + v.chave)) return toast('Esse telefone já está no cadastro.');
-    gravar([registrarNovo(cli, 'FONE', v.padrao, 'NOVO')]); adicionarExtra(cli, 'FONE', v.padrao, 'NOVO', true); $('#novoT').value = '';
-    toast('Telefone adicionado.');
+    gravar([registrarNovo(cli, 'FONE', v.padrao, 'NOVO')]); $('#novoT').value = '';
+    toast('Telefone adicionado e conferido ✔');
   };
-  renderItens(true);
+  $('#addE').onclick = () => {
+    const v = normEmail($('#novoE').value);
+    if (!emailValido(v)) return toast('E-mail inválido.');
+    if (jaExiste(cli, 'E' + v)) return toast('Esse e-mail já está no cadastro.');
+    gravar([registrarNovo(cli, 'EMAIL', v, 'NOVO')]); $('#novoE').value = '';
+    toast('E-mail adicionado e conferido ✔');
+  };
+  $('#tudoOk').onclick = () => {
+    const itens = itensDoCliente(cli).filter(i => i.st !== ST.INVALIDO);
+    if (!itens.some(i => i.tp !== 'EMAIL')) return toast('Adicione pelo menos um telefone do cliente.', 3500);
+    if (itens.some(i => i.tp === 'REVISAR')) return toast('Há número fora do padrão. Corrija com ✎ antes de concluir.', 4000);
+    const faltam = itens.filter(i => !OK_VENDEDOR.has(i.st));
+    if (!faltam.length) return toast('Todos os contatos já estão conferidos ✔');
+    gravar(faltam.map(i => novoReg(cli, i, { acao: 'CONFERIDO' })));
+    toast('Conferência concluída ✔');
+  };
+  renderItens();
 }
 
-function adicionarExtra(cli, tp, valor, origem, silencioso) {
-  // o contato novo já foi gravado como registro (fila -> planilha); aqui só atualiza a tela
-  renderItens(); if (!silencioso) toast('Adicionado. Agora envie a confirmação.');
-}
+function adicionarExtra() { renderItens(); }
+
 
 /** Cria um registro (vai para a fila do aparelho e depois para a planilha). */
 function novoReg(cli, item, extra) {
@@ -447,11 +459,12 @@ function novoReg(cli, item, extra) {
   }, extra || {});
 }
 
-/** Registra na planilha um contato novo digitado pelo vendedor (ainda sem envio). */
+/** Registra na planilha um contato digitado pelo vendedor (já conferido por ele). */
 function registrarNovo(cli, tp, valor, origem) {
   const n = tp === 'EMAIL' ? null : normFone(valor);
-  return novoReg(cli, { tp: tp === 'EMAIL' ? 'EMAIL' : (n ? n.tipo : 'FIXO'), origem, valor }, { acao: 'NOVO' });
+  return novoReg(cli, { tp: tp === 'EMAIL' ? 'EMAIL' : (n ? n.tipo : 'FIXO'), origem, valor }, { acao: 'CONFERIDO' });
 }
+
 
 function jaExiste(cli, k) {
   return itensDoCliente(cli).some(i => i.k === k && i.st !== ST.INVALIDO);
@@ -461,45 +474,40 @@ function aplicarMascara(inp) {
   inp.addEventListener('input', () => { inp.value = mascaraFone(inp.value); });
 }
 
-/** Inválido: o contato sai da lista e o vendedor é obrigado a digitar o novo. */
-function pedirSubstituto(cli, it, restantes, registrarInvalido) {
+/**
+ * Corrigir: o vendedor digita o valor certo (o antigo vira INVALIDO e o novo já fica CONFERIDO).
+ * Se o cliente tiver outro telefone/e-mail, também dá para só remover este.
+ * Se for o único, é obrigatório digitar o novo.
+ */
+function pedirCorrecao(cli, it, restantes) {
   const email = it.tp === 'EMAIL';
+  const nomeTipo = email ? 'e-mail' : 'telefone';
   const fundo = document.createElement('div');
   fundo.className = 'modal-fundo';
-  const opcional = restantes.length > 0;
-  const nomeTipo = email ? 'e-mail' : 'número';
   fundo.innerHTML = `<div class="modal">
-    <div class="modal-t">${email ? '📧 E-mail inválido' : '📱 Telefone inválido'}</div>
-    <div class="modal-old">${esc(it.valor)}</div>
-    ${opcional ? `<div id="passo1">
-      <p>O cliente ainda tem ${restantes.length > 1 ? 'estes' : 'este'} ${nomeTipo}${restantes.length > 1 ? 's' : ''}:</p>
-      <div class="modal-rest">${restantes.map(r => `<div>${email ? '📧' : '📱'} <b>${esc(r.valor)}</b></div>`).join('')}</div>
-      <p>Quer adicionar outro ${nomeTipo} ou manter só ${restantes.length > 1 ? 'esses' : 'esse'}?</p>
-      <div class="modal-b col">
-        <button class="btn" id="opAdd">➕ Adicionar outro ${nomeTipo}</button>
-        <button class="btn sec" id="opManter">✔ Manter só ${restantes.length > 1 ? 'os que restaram' : 'o que restou'}</button>
-        <button class="btn perigo" id="opCanc">Cancelar</button>
-      </div>
-    </div>` : ''}
-    <div id="passo2" ${opcional ? 'class="hide"' : ''}>
-    <p>Este ${email ? 'e-mail' : 'número'} será removido. Digite o ${email ? 'e-mail' : 'telefone'} correto do cliente:</p>
+    <div class="modal-t">✎ Corrigir ${nomeTipo}</div>
+    <div class="modal-old2">Atual: <b>${esc(it.valor)}</b></div>
+    <p>Digite o ${nomeTipo} correto do cliente:</p>
     ${email
-      ? '<input class="in" id="subst" type="email" inputmode="email" autocapitalize="none" placeholder="nome@exemplo.com.br">'
+      ? '<input class="in" id="subst" type="email" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="nome@exemplo.com.br">'
       : '<input class="in" id="subst" type="tel" inputmode="numeric" maxlength="14" placeholder="000-00000-0000"><div class="dica">Celular: 014-99798-3516 · Fixo: 014-03667-1211</div>'}
     <div class="modal-erro" id="substErro"></div>
     <div class="modal-b"><button class="btn sec" id="substCanc">Cancelar</button><button class="btn" id="substOk">Salvar</button></div>
-    </div>
+    ${restantes.length
+      ? `<button class="btn perigo full" id="substRem" style="margin-top:8px">🗑 Só remover este ${nomeTipo} (manter ${restantes.length > 1 ? 'os outros' : esc(restantes[0].valor)})</button>`
+      : `<div class="dica" style="margin-top:8px">Este é o único ${nomeTipo} do cliente, então é obrigatório informar o correto.</div>`}
   </div>`;
   document.body.appendChild(fundo);
   const inp = $('#subst', fundo), err = $('#substErro', fundo);
+  inp.value = it.tp === 'REVISAR' ? '' : it.valor;
   if (!email) aplicarMascara(inp);
+  setTimeout(() => { inp.focus(); inp.select(); }, 50);
   const fechar = () => fundo.remove();
-  if (opcional) {
-    $('#opCanc', fundo).onclick = fechar;
-    $('#opManter', fundo).onclick = () => { registrarInvalido(); fechar(); toast('Removido. ' + (email ? 'E-mail' : 'Número') + ' marcado como inválido.'); };
-    $('#opAdd', fundo).onclick = () => { $('#passo1', fundo).classList.add('hide'); $('#passo2', fundo).classList.remove('hide'); setTimeout(() => inp.focus(), 50); };
-  } else setTimeout(() => inp.focus(), 50);
   $('#substCanc', fundo).onclick = fechar;
+  if ($('#substRem', fundo)) $('#substRem', fundo).onclick = () => {
+    gravar([novoReg(cli, it, { acao: 'INVALIDO' })]); fechar();
+    toast((email ? 'E-mail' : 'Telefone') + ' removido (marcado como inválido).');
+  };
   const salvar = () => {
     let valor, k, tp;
     if (email) {
@@ -511,83 +519,55 @@ function pedirSubstituto(cli, it, restantes, registrarInvalido) {
       if (!v.ok) { err.textContent = v.erro; return; }
       valor = v.padrao; k = 'T' + v.chave; tp = 'FONE';
     }
-    if (k === it.k) { err.textContent = 'Digite um contato diferente do inválido.'; return; }
+    if (k === it.k) {   // não mudou nada: é o mesmo, então está correto
+      if (!OK_VENDEDOR.has(it.st)) gravar([novoReg(cli, it, { acao: 'CONFERIDO' })]);
+      fechar(); return toast('Mantido e conferido ✔');
+    }
     if (jaExiste(cli, k)) { err.textContent = 'Esse contato já está no cadastro.'; return; }
-    registrarInvalido(registrarNovo(cli, tp, valor, 'Substitui ' + it.valor));
-    adicionarExtra(cli, tp, valor, 'Substitui ' + it.valor, true);
+    gravar([novoReg(cli, it, { acao: 'INVALIDO' }), registrarNovo(cli, tp, valor, 'Substitui ' + it.valor)]);
     fechar();
-    toast('Contato substituído. Agora envie a confirmação do novo.', 3500);
+    toast('Corrigido e conferido ✔');
   };
   $('#substOk', fundo).onclick = salvar;
   inp.onkeydown = e => { if (e.key === 'Enter') salvar(); };
 }
 
-/** O primeiro pela ordem das colunas: Fone(1), Fone(2), Cel(1), Cel(2), depois os novos. */
-function melhor(lista) {
-  return lista.slice().sort((a, b) => a.ordem - b.ordem)[0] || null;
-}
+const OK_VENDEDOR = new Set(['CONFERIDO', 'FIXO CONFERIDO', 'CONFIRMADO']);
 
-function renderItens(forcar) {
-  const cli = clienteAtual(); if (!cli || !$('#envCel')) return;
+function renderItens() {
+  const cli = clienteAtual(); if (!cli || !$('#listaT')) return;
   const itens = itensDoCliente(cli);
   const vis = itens.filter(i => i.st !== ST.INVALIDO);   // inválidos saem da tela
   const tel = vis.filter(i => i.tp !== 'EMAIL'), em = vis.filter(i => i.tp === 'EMAIL');
-  const cels = tel.filter(i => i.tp === 'CELULAR' && i.st !== ST.RECUSADO);
-  const emOk = em.filter(i => i.st !== ST.RECUSADO);
-
-  // campos principais (só preenche o que o vendedor não estiver editando)
-  const iCel = $('#envCel'), iEm = $('#envEm');
-  if (forcar || iCel.dataset.sujo !== '1') { const c = melhor(cels); iCel.value = c ? c.valor : ''; iCel.dataset.sujo = ''; S.envOrig.cel = c; }
-  if (forcar || iEm.dataset.sujo !== '1') { const e = melhor(emOk); iEm.value = e ? e.valor : ''; iEm.dataset.sujo = ''; S.envOrig.em = e; }
-  // se o item escolhido sumiu (ex.: ficou inválido), recalcula
-  if (S.envOrig.cel && !vis.some(i => i.k === S.envOrig.cel.k)) { const c = melhor(cels); iCel.value = c ? c.valor : ''; iCel.dataset.sujo = ''; S.envOrig.cel = c; }
-  if (S.envOrig.em && !vis.some(i => i.k === S.envOrig.em.k)) { const e = melhor(emOk); iEm.value = e ? e.valor : ''; iEm.dataset.sujo = ''; S.envOrig.em = e; }
-  const cel = S.envOrig.cel ? vis.find(i => i.k === S.envOrig.cel.k) : null;
-  const eml = S.envOrig.em ? vis.find(i => i.k === S.envOrig.em.k) : null;
-  if (cel) S.envOrig.cel = cel;
-  if (eml) S.envOrig.em = eml;
-
-  const opc = it => { const n = (it.tp === 'EMAIL' ? em : tel).indexOf(it) + 1; return n ? `<span class="chip ouro">${n}ª opção</span> ` : ''; };
-  const stTxt = it => opc(it) + (it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>') +
-    (it.ult && it.ult.rs ? ' <small>em ' + dataBR(it.ult.rs) + '</small>' : '') +
-    ' <small class="org">' + esc(it.origem) + '</small>';
-  $('#envCelSt').innerHTML = cel ? stTxt(cel) : '<span class="chip verm">' + (tel.length ? 'Sem celular – digite um' : 'Sem telefone – digite um celular') + '</span>';
-  $('#envEmSt').innerHTML = eml ? stTxt(eml) : '<span class="chip cinza">Sem e-mail – digite se tiver</span>';
-  $('#invCel').classList.toggle('hide', !cel);
-  $('#invEm').classList.toggle('hide', !eml);
-  $('#invCel').onclick = () => cel && executar(cli, cel, 'INVALIDO', itens);
-  $('#invEm').onclick = () => eml && executar(cli, eml, 'INVALIDO', itens);
-
-  // outros telefones / e-mails dentro do mesmo quadro
-  const outros = vis.filter(i => i !== cel && i !== eml);
-  $('#outros').innerHTML = outros.length ? '<div class="lb" style="margin-top:10px">Outros contatos do cadastro</div>' + outros.map(o => linhaOutro(o, (o.tp === 'EMAIL' ? em : tel).indexOf(o) + 1)).join('') : '';
-  $('#outros').onclick = e => {
+  $('#listaT').innerHTML = tel.length ? tel.map((it, n) => linhaContato(it, n + 1)).join('') : '<div class="vazio-p">Nenhum telefone. Adicione um abaixo.</div>';
+  $('#listaE').innerHTML = em.length ? em.map((it, n) => linhaContato(it, n + 1)).join('') : '<div class="vazio-p">Nenhum e-mail. Adicione se o cliente tiver.</div>';
+  const handler = e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
     const it = itens.find(i => i.k === b.dataset.k); if (!it) return;
-    if (b.dataset.acao === 'USAR') {
-      const campo = it.tp === 'EMAIL' ? iEm : iCel;
-      campo.value = it.valor; campo.dataset.sujo = '';
-      if (it.tp === 'EMAIL') S.envOrig.em = it; else S.envOrig.cel = it;
-      return renderItens();
-    }
-    executar(cli, it, b.dataset.acao, itens);
+    if (b.dataset.acao === 'OK') { gravar([novoReg(cli, it, { acao: 'CONFERIDO' })]); return toast('Conferido ✔'); }
+    const restantes = vis.filter(i => i !== it && (i.tp === 'EMAIL') === (it.tp === 'EMAIL'));
+    pedirCorrecao(cli, it, restantes);
   };
-  const tudoOk = (!cel || cel.st === ST.CONFIRMADO) && (!eml || eml.st === ST.CONFIRMADO) && (cel || eml);
-  $('#envBtn').innerHTML = tudoOk ? '↻ Reenviar confirmação pelo WhatsApp' : '📲 Enviar confirmação pelo WhatsApp';
+  $('#listaT').onclick = handler; $('#listaE').onclick = handler;
+  const tudo = vis.length && vis.every(i => OK_VENDEDOR.has(i.st));
+  $('#tudoOk').innerHTML = tudo ? '✔ Contatos conferidos' : '✔ Todos os contatos estão corretos';
+  $('#tudoOk').classList.toggle('feito', !!tudo);
 }
 
-function linhaOutro(it, n) {
+function linhaContato(it, n) {
   const k = esc(it.k);
-  const tipo = it.tp === 'CELULAR' ? 'Celular' : it.tp === 'FIXO' ? 'Fixo' : it.tp === 'EMAIL' ? 'E-mail' : 'Revisar';
+  const tipo = it.tp === 'CELULAR' ? 'Celular' : it.tp === 'FIXO' ? 'Fixo' : it.tp === 'EMAIL' ? 'E-mail' : 'Fora do padrão';
+  const ok = OK_VENDEDOR.has(it.st);
   let b = '';
-  if (it.tp === 'CELULAR' || it.tp === 'EMAIL') b += `<button class="btn sec peq" data-acao="USAR" data-k="${k}">⇧ Usar</button>`;
-  if (it.tp === 'FIXO' && it.st !== ST.FIXO) b += `<button class="btn peq" data-acao="CONFERIDO" data-k="${k}">✔ Conferido</button>`;
-  b += `<button class="btn perigo xq" data-acao="INVALIDO" data-k="${k}" title="Inválido">✖</button>`;
-  return `<div class="outro">
+  if (!ok && it.tp !== 'REVISAR') b += `<button class="btn peq bok" data-acao="OK" data-k="${k}">✔ Correto</button>`;
+  b += `<button class="btn sec peq" data-acao="EDIT" data-k="${k}">✎${ok ? '' : ' Corrigir'}</button>`;
+  const quando = it.ult && OK_VENDEDOR.has(it.ult.st) ? ' <small>' + dataBR(it.ult.dt) + ' · ' + esc(it.ult.u) + '</small>' : '';
+  return `<div class="outro${ok ? ' ok' : ''}">
     <div class="o1"><span class="val${it.tp === 'EMAIL' ? '' : ' tel'}">${esc(it.valor)}</span><span class="ob">${b}</span></div>
-    <div class="o2"><span class="chip ouro">${n}ª opção</span><span class="chip ${it.tp === 'REVISAR' ? 'verm' : 'cinza'}">${tipo}</span>${it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>'}<small class="org">${esc(it.origem)}</small></div>
+    <div class="o2">${it.tp !== 'EMAIL' ? `<span class="chip ouro">${n}ª opção</span>` : ''}<span class="chip ${it.tp === 'REVISAR' ? 'verm' : 'cinza'}">${tipo}</span>${ok ? chip(it.st) : (it.st && it.st !== 'NOVO - NAO ENVIADO' ? chip(it.st) : '<span class="chip cinza">A conferir</span>')}${quando}<small class="org">${esc(it.origem)}</small></div>
   </div>`;
 }
+
 
 function nomeBonito(s) {
   const minus = ['da', 'de', 'do', 'das', 'dos', 'e'];
@@ -622,56 +602,8 @@ function urlConfirmacao(tokens) {
   return base + '?t=' + tokens.join('-');
 }
 
-function executar(cli, it, acao, itens) {
-  const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
-  const novo = (item, extra) => novoReg(cli, item, extra);
+function gravarConferencia() {}
 
-  if (acao === 'CONFERIDO') { gravar([novo(it, { acao: 'CONFERIDO' })]); return toast('Telefone fixo marcado como conferido'); }
-  if (acao === 'INVALIDO') {
-    const mesmoGrupo = i => (i.tp === 'EMAIL') === (it.tp === 'EMAIL');
-    const restantes = itens.filter(i => i.k !== it.k && i.st !== ST.INVALIDO && mesmoGrupo(i));
-    return pedirSubstituto(cli, it, restantes, regNovo => gravar([novo(it, { acao: 'INVALIDO' })].concat(regNovo ? [regNovo] : [])));
-  }
-
-}
-
-/** Um botão só: envia telefone + e-mail na mesma mensagem, com o que estiver digitado no quadro. */
-function enviarConfirmacao(cli) {
-  const itens = itensDoCliente(cli);
-  const contato = ($('#contato') && $('#contato').value.trim()) || cli.ct || '';
-  if (!$('#envCel').value.replace(/\D/g, '')) return toast('Digite o celular do cliente para enviar pelo WhatsApp.', 4000);
-  const v = validarFone($('#envCel').value);
-  if (!v.ok) return toast(v.erro, 4500);
-  if (v.tipo !== 'CELULAR') return toast('Para o WhatsApp precisa ser um celular (9 depois do DDD).', 4000);
-  const emTxt = $('#envEm').value.trim();
-  const em = normEmail(emTxt);
-  if (emTxt && !emailValido(em)) return toast('E-mail inválido. Corrija ou deixe em branco.', 4000);
-
-  const regs = [];
-  // decide qual item usar; se o vendedor alterou o valor, o antigo vira inválido
-  const resolver = (k, valorNovo, tp, orig) => {
-    const existente = itens.find(i => i.k === k && i.st !== ST.INVALIDO);
-    if (existente) return existente;
-    let origem = 'NOVO';
-    if (orig && orig.k !== k && orig.st !== ST.INVALIDO) {
-      regs.push(novoReg(cli, orig, { acao: 'INVALIDO' }));
-      origem = 'Substitui ' + orig.valor;
-    }
-    return { k, tp, valor: valorNovo, origem, vb: '', st: '' };
-  };
-  const cel = resolver('T' + v.chave, v.padrao, 'CELULAR', S.envOrig.cel);
-  const eml = em ? resolver('E' + em, em, 'EMAIL', S.envOrig.em) : null;
-
-  const alvos = [cel];
-  if (eml && (eml.st !== ST.CONFIRMADO || cel.st === ST.CONFIRMADO)) alvos.push(eml);
-  const envios = alvos.map(a => novoReg(cli, a, { token: (a.tp === 'EMAIL' ? 'e' : 'f') + uid(8), cn: 'WHATSAPP', pa: v.padrao }));
-  const link = urlConfirmacao(envios.map(r => r.token));
-  const msg = encodeURIComponent(mensagemConfirmacao(cli, contato, link, envios));
-  gravar(regs.concat(envios), true);
-  renderItens(true);
-  // api.whatsapp.com mantém os emojis (o atalho wa.me estraga emojis em alguns aparelhos e no WhatsApp do computador)
-  abrirLink('https://api.whatsapp.com/send?phone=' + v.intl + '&text=' + msg);
-}
 
 function gravar(regs, forcar) {
   const f = fila.ler(); regs.forEach(r => f.push(r)); fila.gravar(f);   // 1º grava no aparelho (nunca se perde)
@@ -710,13 +642,11 @@ function renderPainel() {
   // por usuário que executou
   const porU = {};
   regs.forEach(r => {
-    const o = porU[r.u] = porU[r.u] || { env: 0, conf: 0, pend: 0, rec: 0, fixo: 0, inv: 0 };
-    if (r.cn && r.cn !== 'NENHUM') o.env++;
-    if (r.st === ST.CONFIRMADO) o.conf++;
-    else if (AGUARDA.has(r.st)) o.pend++;
-    else if (r.st === ST.RECUSADO) o.rec++;
-    else if (r.st === ST.FIXO) o.fixo++;
+    const o = porU[r.u] = porU[r.u] || { conf: 0, corr: 0, inv: 0, novos: 0, pend: 0 };
+    const subst = /^Substitui /.test(r.or || '');
+    if (OK_VENDEDOR.has(r.st)) { if (subst) o.corr++; else if (r.or === 'NOVO') o.novos++; else o.conf++; }
     else if (r.st === ST.INVALIDO) o.inv++;
+    else if (AGUARDA.has(r.st)) o.pend++;
   });
   // carteira por vendedor (supervisor)
   const porV = {};
@@ -734,20 +664,20 @@ function renderPainel() {
     ${Object.keys(mapa).sort((a, b) => a - b).map(v => { const o = mapa[v]; const p = o.tot ? Math.round(o.ini / o.tot * 100) : 0; return `<tr><td><b>${esc(v)}</b></td><td>${o.tot}</td><td>${o.ini}</td><td>${o.ag}</td><td>${o.ok}</td><td><div class="barra"><i style="width:${p}%"></i></div><small>${p}%</small></td></tr>`; }).join('')}
   </table></div>`;
   const resumoU = o => `<div class="mini">
-      <div><b>${o.env}</b><span>Enviados</span></div><div class="v"><b>${o.conf}</b><span>Confirm.</span></div>
-      <div class="o"><b>${o.pend}</b><span>Aguard.</span></div><div class="r"><b>${o.rec}</b><span>Recus.</span></div>
-      <div><b>${o.fixo}</b><span>Fixos</span></div><div><b>${o.inv}</b><span>Inválid.</span></div></div>`;
+      <div class="v"><b>${o.conf}</b><span>Conferidos</span></div><div class="o"><b>${o.corr}</b><span>Corrigidos</span></div>
+      <div><b>${o.novos}</b><span>Adicionados</span></div><div class="r"><b>${o.inv}</b><span>Removidos</span></div>
+      ${o.pend ? `<div><b>${o.pend}</b><span>Aguard. (WhatsApp)</span></div>` : ''}</div>`;
   $('#main').innerHTML = `
   ${ger ? `<select class="in" id="pmesa" style="margin-bottom:8px"><option value="">Todas as mesas</option>${Object.keys(porM).sort((a, b) => a - b).map(m => `<option value="${esc(m)}" ${S.f.mesa === m ? 'selected' : ''}>Mesa ${esc(m)}</option>`).join('')}</select>` : ''}
   <div class="cards">
     <div class="kpi"><div class="n">${calc.length}</div><div class="t">Clientes ${ger ? (S.f.mesa ? 'da mesa ' + esc(S.f.mesa) : 'no total') : sup ? 'da mesa' : 'na carteira'}</div></div>
     <div class="kpi o"><div class="n">${calc.length - cont.NI}</div><div class="t">Iniciados</div></div>
-    <div class="kpi o"><div class="n">${cont.AG}</div><div class="t">Aguardando dono</div></div>
+    <div class="kpi o"><div class="n">${cont.EA + cont.AG}</div><div class="t">Em andamento</div></div>
     <div class="kpi"><div class="n">${cont.OK}</div><div class="t">Concluídos</div></div>
   </div>
   ${ger && !S.f.mesa ? tabela('Progresso por mesa', 'Mesa', porM) : ''}
   ${sup ? tabela('Carteira por vendedor', 'Vend.', porV) : ''}
-  <div class="box"><h3>${sup ? 'Ações por usuário' : 'Resumo dos meus envios'}</h3>
+  <div class="box"><h3>${sup ? 'Conferências por usuário' : 'Minhas conferências'}</h3>
     ${usuarios.length ? usuarios.map(u => (sup ? `<div class="mini-u">Usuário <b>${esc(u)}</b></div>` : '') + resumoU(porU[u])).join('') : '<div class="vazio">Nada enviado ainda.</div>'}
   </div>
   <div class="box"><h3>Histórico</h3>
@@ -759,7 +689,7 @@ function renderPainel() {
       ${filtrados.map(r => { const c = cliPorCod.get(r.c); return `<div class="hr" data-cli="${esc(r.c)}">
         <div class="hr1"><b>${esc(c ? (c.s || c.r) : r.c)}</b>${chip(r.st)}</div>
         <div class="hr2">${r.tp === 'EMAIL' ? '📧' : '📱'} ${esc(r.vi)}</div>
-        <div class="hr3">${dataBR(r.dt)}${sup ? ' · ' + esc(r.u) : ''} · ${esc(r.cn === 'NENHUM' ? 'sem envio' : r.cn)}${r.pa && r.tp === 'EMAIL' ? ' p/ ' + esc(r.pa) : ''}${r.rs ? ' · respondido ' + dataBR(r.rs) : ''}${r.local ? ' · <span class="nsinc">⏳ não sincronizado</span>' : ''}</div>
+        <div class="hr3">${dataBR(r.dt)}${sup ? ' · ' + esc(r.u) : ''} · ${esc(/^Substitui /.test(r.or || '') ? 'corrigido (' + r.or.toLowerCase() + ')' : r.or === 'NOVO' ? 'adicionado' : r.or || '')}${r.rs ? ' · respondido ' + dataBR(r.rs) : ''}${r.local ? ' · <span class="nsinc">⏳ não sincronizado</span>' : ''}</div>
       </div>`; }).join('') || '<div class="vazio">Sem registros.</div>'}
     </div>
   </div>`;
