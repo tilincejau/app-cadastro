@@ -1,7 +1,7 @@
 /* Service worker: deixa o app abrir sem internet.
    Com internet ele sempre busca a versão mais nova (atualização na hora);
    sem internet usa a cópia guardada. Ao publicar, aumente a VERSAO. */
-const VERSAO = 'lince-cadastro-v11';
+const VERSAO = 'lince-cadastro-v12';
 const ARQUIVOS = ['./', './index.html', './app.js', './fone.js', './config.js', './manifest.json',
   './logo.png', './logo-branca.png', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './favicon.png',
   './c.html', './og.png'];

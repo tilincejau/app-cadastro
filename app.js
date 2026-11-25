@@ -4,7 +4,7 @@
    e enviada à planilha quando houver internet. Nada se perde.
    ================================================================ */
 'use strict';
-const APP_VERSAO = '11';
+const APP_VERSAO = '12';
 
 const C = window.CONFIG;
 const DIAS = { 1: 'Segunda', 2: 'Terça', 3: 'Quarta', 4: 'Quinta', 5: 'Sexta' };
@@ -97,14 +97,14 @@ async function api(body, timeoutMs) {
 function carregarDados() {
   if (!S.sess) return;
   const d = LS.get('dados_' + S.sess.usuario, null);
-  if (d) { S.clientes = d.clientes || []; S.registros = d.registros || []; S.dadosEm = d.em || 0; }
-  S.extras = LS.get('extras_' + S.sess.usuario, {});
+  if (d) { S.clientes = d.clientes || []; S.registros = d.registros || []; S.dadosEm = d.em || 0; S.baseHash = d.hash || ''; }
+  LS.del('extras_' + S.sess.usuario);   // versões antigas guardavam contatos aqui; agora tudo vem da planilha
   reindexar();
 }
 function salvarDados() {
   if (!S.sess) return;
   try {
-    LS.set('dados_' + S.sess.usuario, { clientes: S.clientes, registros: S.registros, em: S.dadosEm });
+    LS.set('dados_' + S.sess.usuario, { clientes: S.clientes, registros: S.registros, em: S.dadosEm, hash: S.baseHash || '' });
   } catch (e) { toast('Memória do aparelho cheia. Os envios pendentes continuam salvos.'); }
 }
 
@@ -141,16 +141,15 @@ function itensDoCliente(cli) {
   const addFone = (raw, origem, vb) => {
     const n = normFone(raw, C.DDD_PADRAO); if (!n) return;
     const k = 'T' + n.chave; if (vistos.has(k)) return; vistos.add(k);
-    itens.push({ k, tp: n.tipo, valor: n.padrao, n, origem, vb });
+    itens.push({ k, tp: n.tipo, valor: n.padrao, n, origem, vb, ordem: CAMPOS_FONE.indexOf(origem) >= 0 ? CAMPOS_FONE.indexOf(origem) : 100 + itens.length });
   };
   const addEmail = (raw, origem, vb) => {
     const e = normEmail(raw); if (!e) return;
     const k = 'E' + e; if (vistos.has(k)) return; vistos.add(k);
-    itens.push({ k, tp: 'EMAIL', valor: e, origem, vb });
+    itens.push({ k, tp: 'EMAIL', valor: e, origem, vb, ordem: origem === 'Email-NF-e' ? 0 : 100 + itens.length });
   };
   (cli.f || []).forEach((raw, i) => addFone(raw, CAMPOS_FONE[i], raw));
   addEmail(cli.e, 'Email-NF-e', cli.e);
-  (S.extras[cli.c] || []).forEach(x => x.tp === 'EMAIL' ? addEmail(x.valor, x.origem || 'NOVO', '') : addFone(x.valor, x.origem || 'NOVO', ''));
   regs.forEach(r => r.tp === 'EMAIL' ? addEmail(r.vi, r.or || 'NOVO', r.vb) : addFone(r.vi, r.or || 'NOVO', r.vb));
   itens.forEach(it => {
     it.regs = regs.filter(r => chaveReg(r) === it.k);
@@ -158,6 +157,13 @@ function itensDoCliente(cli) {
     it.ult = it.regs[0] || null;
     it.st = conf ? ST.CONFIRMADO : (it.ult ? it.ult.st : '');
   });
+  // contato que substituiu outro herda a posição dele (ex.: o novo do Fone(1) continua sendo a 1ª opção)
+  for (let volta = 0; volta < 3; volta++) itens.forEach(it => {
+    const m = /^Substitui (.+)$/.exec(it.origem || ''); if (!m) return;
+    const antigo = itens.find(o => o !== it && o.valor === m[1].trim());
+    if (antigo) it.ordem = antigo.ordem + 0.5;
+  });
+  itens.sort((a, b) => a.ordem - b.ordem);
   return itens;
 }
 
@@ -202,7 +208,7 @@ async function entrar() {
     const r = await api({ acao: 'login', usuario: u, senha: s }, 90000);
     S.sess = { usuario: r.usuario, token: r.token, perfil: r.perfil };
     LS.set('sessao', S.sess); LS.set('auth_' + u, hash); LS.set('ultimoUsuario', u);
-    S.clientes = r.clientes; S.registros = r.registros; S.dadosEm = Date.now();
+    S.clientes = r.clientes; S.registros = r.registros; S.dadosEm = Date.now(); S.baseHash = r.hash || '';
     // itens antigos deste usuário na fila passam a usar a sessão nova
     const f = fila.ler(); f.forEach(i => { if (i.usuario === u) i.auth = r.token; }); fila.gravar(f);
     salvarDados(); carregarDados();
@@ -427,9 +433,7 @@ function renderDetalhe() {
 }
 
 function adicionarExtra(cli, tp, valor, origem, silencioso) {
-  const l = S.extras[cli.c] = S.extras[cli.c] || [];
-  l.push({ tp, valor, origem: origem || 'NOVO' });
-  LS.set('extras_' + S.sess.usuario, S.extras);
+  // o contato novo já foi gravado como registro (fila -> planilha); aqui só atualiza a tela
   renderItens(); if (!silencioso) toast('Adicionado. Agora envie a confirmação.');
 }
 
@@ -518,9 +522,9 @@ function pedirSubstituto(cli, it, restantes, registrarInvalido) {
   inp.onkeydown = e => { if (e.key === 'Enter') salvar(); };
 }
 
-const PRIORIDADE = { 'NOVO - NAO ENVIADO': 0, '': 1, PENDENTE: 2, RECUSADO: 3, CONFIRMADO: 4, 'FIXO CONFERIDO': 5 };
+/** O primeiro pela ordem das colunas: Fone(1), Fone(2), Cel(1), Cel(2), depois os novos. */
 function melhor(lista) {
-  return lista.slice().sort((a, b) => (PRIORIDADE[a.st] ?? 9) - (PRIORIDADE[b.st] ?? 9))[0] || null;
+  return lista.slice().sort((a, b) => a.ordem - b.ordem)[0] || null;
 }
 
 function renderItens(forcar) {
@@ -543,7 +547,8 @@ function renderItens(forcar) {
   if (cel) S.envOrig.cel = cel;
   if (eml) S.envOrig.em = eml;
 
-  const stTxt = it => (it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>') +
+  const opc = it => { const n = (it.tp === 'EMAIL' ? em : tel).indexOf(it) + 1; return n ? `<span class="chip ouro">${n}ª opção</span> ` : ''; };
+  const stTxt = it => opc(it) + (it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>') +
     (it.ult && it.ult.rs ? ' <small>em ' + dataBR(it.ult.rs) + '</small>' : '') +
     ' <small class="org">' + esc(it.origem) + '</small>';
   $('#envCelSt').innerHTML = cel ? stTxt(cel) : '<span class="chip verm">' + (tel.length ? 'Sem celular – digite um' : 'Sem telefone – digite um celular') + '</span>';
@@ -555,7 +560,7 @@ function renderItens(forcar) {
 
   // outros telefones / e-mails dentro do mesmo quadro
   const outros = vis.filter(i => i !== cel && i !== eml);
-  $('#outros').innerHTML = outros.length ? '<div class="lb" style="margin-top:10px">Outros contatos do cadastro</div>' + outros.map(linhaOutro).join('') : '';
+  $('#outros').innerHTML = outros.length ? '<div class="lb" style="margin-top:10px">Outros contatos do cadastro</div>' + outros.map(o => linhaOutro(o, (o.tp === 'EMAIL' ? em : tel).indexOf(o) + 1)).join('') : '';
   $('#outros').onclick = e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
     const it = itens.find(i => i.k === b.dataset.k); if (!it) return;
@@ -571,7 +576,7 @@ function renderItens(forcar) {
   $('#envBtn').innerHTML = tudoOk ? '↻ Reenviar confirmação pelo WhatsApp' : '📲 Enviar confirmação pelo WhatsApp';
 }
 
-function linhaOutro(it) {
+function linhaOutro(it, n) {
   const k = esc(it.k);
   const tipo = it.tp === 'CELULAR' ? 'Celular' : it.tp === 'FIXO' ? 'Fixo' : it.tp === 'EMAIL' ? 'E-mail' : 'Revisar';
   let b = '';
@@ -580,7 +585,7 @@ function linhaOutro(it) {
   b += `<button class="btn perigo xq" data-acao="INVALIDO" data-k="${k}" title="Inválido">✖</button>`;
   return `<div class="outro">
     <div class="o1"><span class="val${it.tp === 'EMAIL' ? '' : ' tel'}">${esc(it.valor)}</span><span class="ob">${b}</span></div>
-    <div class="o2"><span class="chip ${it.tp === 'REVISAR' ? 'verm' : 'cinza'}">${tipo}</span>${it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>'}<small class="org">${esc(it.origem)}</small></div>
+    <div class="o2"><span class="chip ouro">${n}ª opção</span><span class="chip ${it.tp === 'REVISAR' ? 'verm' : 'cinza'}">${tipo}</span>${it.st ? chip(it.st) : '<span class="chip cinza">Não enviado</span>'}<small class="org">${esc(it.origem)}</small></div>
   </div>`;
 }
 
@@ -792,9 +797,10 @@ async function sincronizar(manual) {
     }
     // 2) baixa status atualizados (e a base de clientes quando necessário)
     if (S.sess) {
-      const velha = !S.dadosEm || (Date.now() - S.dadosEm) > (C.ATUALIZAR_BASE_HORAS || 6) * 3600e3;
-      const r = await api({ acao: velha ? 'dados' : 'sync', token: S.sess.token, itens: [] }, 90000);
+      // confere a base toda vez; o servidor só manda os clientes se algo mudou na planilha
+      const r = await api({ acao: 'dados', token: S.sess.token, hash: S.dadosEm ? S.baseHash : '' }, 90000);
       if (r.clientes) { S.clientes = r.clientes; S.dadosEm = Date.now(); }
+      if (r.hash) S.baseHash = r.hash;
       if (r.registros) S.registros = r.registros;
       salvarDados();
     }
